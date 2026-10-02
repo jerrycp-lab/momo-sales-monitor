@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 程式作業，交叉分析</title><meta name="robots" content="noindex, nofollow">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap');
+:root {
+  --bg:#f0f4f8; --surface:#fff; --border:#e2e8f0; --border2:#cbd5e1;
+  --text:#1e293b; --text-mid:#475569; --text-dim:#94a3b8;
+  --blue:#2563eb; --blue-lt:#dbeafe;
+  --green:#16a34a; --green-lt:#dcfce7;
+  --orange:#ea580c; --orange-lt:#ffedd5;
+  --red:#dc2626; --red-lt:#fee2e2;
+  --momo:#e84393; --momo-lt:#fce7f3;
+  --purple:#7c3aed; --purple-lt:#ede9fe;
+  --radius:10px; --shadow:0 1px 3px rgba(0,0,0,.08);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-serif;font-size:13px;}
+::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+
+/* TOPBAR */
+.topbar{background:#1a3a5c;color:#fff;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;}
+.topbar-logo{font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px;}
+.topbar-logo .icon{width:32px;height:32px;border-radius:8px;background:var(--purple);display:flex;align-items:center;justify-content:center;font-size:16px;}
+.topbar-nav{display:flex;gap:6px;margin-left:18px;}
+.topbar-nav a{color:rgba(255,255,255,.65);text-decoration:none;font-size:12px;padding:6px 12px;border-radius:7px;transition:all .15s;}
+.topbar-nav a:hover{background:rgba(255,255,255,.08);color:#fff;}
+.topbar-nav a.active{background:rgba(255,255,255,.14);color:#fff;font-weight:700;}
+.topbar-right{display:flex;align-items:center;gap:16px;font-size:12px;color:rgba(255,255,255,.6);}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#4ade80;animation:blink 2s infinite;display:inline-block;margin-right:4px;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* CONTENT */
+.content{padding:20px 24px;}
+
+/* 查詢列（期間篩選） */
+.query-bar{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow);flex-wrap:wrap;}
+.q-label{font-size:13px;font-weight:700;color:var(--text-mid);white-space:nowrap;}
+.q-date{padding:6px 12px;border-radius:7px;border:1px solid var(--border2);font-family:inherit;font-size:13px;color:var(--text);background:var(--bg);outline:none;cursor:pointer;}
+.q-date:focus{border-color:var(--blue);}
+.q-sep{color:var(--text-dim);}
+.quick-btn{padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;font-family:inherit;color:var(--text-dim);transition:all .15s;font-weight:600;}
+.quick-btn:hover{border-color:var(--purple);color:var(--purple);}
+.quick-btn.active{background:var(--purple);color:#fff;border-color:var(--purple);}
+.q-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+.reload-btn{padding:6px 14px;border-radius:7px;background:var(--blue);color:#fff;border:none;font-size:12px;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;}
+.reload-btn:hover{background:#1d4ed8;}
+.last-update{font-size:11px;color:var(--text-dim);}
+
+/* 主分類頁籤 */
+.main-tabs{display:flex;gap:8px;margin-bottom:12px;}
+.main-tab{padding:10px 20px;border-radius:var(--radius);font-size:14px;font-weight:700;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--text-mid);box-shadow:var(--shadow);transition:all .15s;}
+.main-tab:hover{border-color:var(--purple);color:var(--purple);}
+.main-tab.active{background:var(--purple);color:#fff;border-color:var(--purple);}
+
+/* 子頁籤 */
+.sub-tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;}
+.sub-tab{padding:7px 16px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--text-dim);transition:all .15s;}
+.sub-tab:hover{border-color:var(--momo);color:var(--momo);}
+.sub-tab.active{background:var(--momo);color:#fff;border-color:var(--momo);}
+
+/* 卡片／表格（沿用 dashboard 風格） */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px;}
+.card-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);}
+.card-title{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px;}
+.card-dot{width:7px;height:7px;border-radius:50%;}
+.sort-note{font-size:11px;color:var(--text-dim);}
+table{width:100%;border-collapse:collapse;}
+thead th{padding:9px 14px;text-align:left;font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;background:#f8fafc;border-bottom:1px solid var(--border);font-weight:500;}
+tbody tr{border-bottom:1px solid var(--border);transition:background .12s;}
+tbody tr:last-child{border-bottom:none;}
+tbody tr:hover{background:#f8fafc;}
+tbody td{padding:9px 14px;vertical-align:middle;}
+.prod-name{font-weight:600;font-size:12px;}
+.prod-brand{font-size:11px;color:var(--text-dim);}
+.qty{font-family:'DM Mono',monospace;font-size:12px;}
+.zero{color:var(--text-dim);}
+
+/* 統計卡 */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow);}
+.sc-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
+.sc-label{font-size:11px;color:var(--text-dim);}
+.sc-ico{font-size:18px;}
+.sc-val{font-size:22px;font-weight:700;font-family:'DM Mono',monospace;}
+.sc-note{font-size:11px;color:var(--text-dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* placeholder */
+.placeholder{padding:60px 20px;text-align:center;color:var(--text-dim);}
+.placeholder .big{font-size:32px;margin-bottom:10px;}
+
+/* 載入狀態 */
+.loading{text-align:center;padding:60px;color:var(--text-dim);}
+.loading-spin{font-size:32px;animation:spin 1s linear infinite;display:inline-block;margin-bottom:12px;}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.error-msg{background:var(--red-lt);color:var(--red);padding:16px;border-radius:var(--radius);margin-bottom:16px;font-size:13px;}
+
+/* 搜尋框（商品履歷查詢用） */
+.search-box{padding:7px 12px;border-radius:7px;border:1px solid var(--border2);font-family:inherit;font-size:13px;color:var(--text);background:var(--bg);outline:none;min-width:220px;}
+.search-box:focus{border-color:var(--blue);}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo">
+    <div class="icon">📊</div>
+    AI 程式作業，交叉分析
+    <div class="topbar-nav">
+      <a href="dashboard.html">即時監控</a>
+      <a href="analysis.html" class="active">交叉分析</a>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span><span class="live-dot"></span>即時資料</span>
+    <span id="lastUpdate">載入中...</span>
+  </div>
+</div>
+
+<div class="content">
+
+  <!-- 期間篩選列 -->
+  <div class="query-bar">
+    <span class="q-label">📅 期間</span>
+    <input type="date" id="startDate" class="q-date" onchange="onManualDateChange()">
+    <span class="q-sep">至</span>
+    <input type="date" id="endDate" class="q-date" onchange="onManualDateChange()">
+    <div style="display:flex;gap:5px;flex-wrap:wrap;" id="quickBtns">
+      <button class="quick-btn" onclick="selectQuickRange(7,this)">近7天</button>
+      <button class="quick-btn" onclick="selectQuickRange(30,this)">近30天</button>
+      <button class="quick-btn active" onclick="selectQuickRange('all',this)">全部期間</button>
+    </div>
+    <div class="q-right">
+      <span class="last-update" id="csvLastUpdate"></span>
+      <button class="reload-btn" onclick="loadData()">🔄 重新載入</button>
+    </div>
+  </div>
+
+  <div id="errorMsg" class="error-msg" style="display:none"></div>
+  <div id="loadingArea" class="loading">
+    <div class="loading-spin">⏳</div>
+    <div>載入資料中...</div>
+  </div>
+
+  <div id="mainContent" style="display:none">
+
+    <!-- 主分類頁籤 -->
+    <div class="main-tabs">
+      <div class="main-tab active" data-main="product" onclick="selectMainTab('product')">🛒 商品分析</div>
+      <div class="main-tab" data-main="dimension" onclick="selectMainTab('dimension')">📈 維度排行</div>
+    </div>
+
+    <!-- 商品分析：子頁籤 -->
+    <div id="tabs-product" class="sub-tabs">
+      <div class="sub-tab active" data-sub="rank" onclick="selectSubTab('product','rank')">商品排行榜</div>
+      <div class="sub-tab" data-sub="history" onclick="selectSubTab('product','history')">商品履歷查詢</div>
+    </div>
+
+    <!-- 維度排行：子頁籤 -->
+    <div id="tabs-dimension" class="sub-tabs" style="display:none">
+      <div class="sub-tab active" data-sub="brand" onclick="selectSubTab('dimension','brand')">品牌排行榜</div>
+      <div class="sub-tab" data-sub="slot" onclick="selectSubTab('dimension','slot')">檔期整體表現比較</div>
+      <div class="sub-tab" data-sub="weekday" onclick="selectSubTab('dimension','weekday')">星期效應</div>
+      <div class="sub-tab" data-sub="price" onclick="selectSubTab('dimension','price')">價格帶表現</div>
+    </div>
+
+    <!-- 內容區：各子頁籤對應一個 view -->
+    <div id="view-rank" class="view-panel"><div class="placeholder"><div class="big">🚧</div>商品排行榜 — 階段2開發</div></div>
+    <div id="view-history" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>商品履歷查詢 — 階段2開發</div></div>
+    <div id="view-brand" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>品牌排行榜 — 階段3開發</div></div>
+    <div id="view-slot" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>檔期整體表現比較 — 階段3開發</div></div>
+    <div id="view-weekday" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>星期效應 — 階段3開發</div></div>
+    <div id="view-price" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>價格帶表現 — 階段3開發</div></div>
+
+  </div>
+</div>
+
+<script>
+// ── 設定：你的 GitHub 帳號和 repo 名稱 ──
+const GITHUB_USER = 'jerrycp-lab';
+const GITHUB_REPO = 'momo-sales-monitor';
+const CSV_URL = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main/snapshots/all_results.csv`;
+// ─────────────────────────────────────────
+
+// 價格帶分界（依實際資料分布統計後決定，見討論記錄）
+const PRICE_BANDS = [
+  {label:'<500',        min:0,     max:499},
+  {label:'500–1,500',   min:500,   max:1499},
+  {label:'1,500–5,000', min:1500,  max:4999},
+  {label:'5,000–15,000',min:5000,  max:14999},
+  {label:'15,000+',     min:15000, max:Infinity},
+];
+
+let allData = [];
+let curMain = 'product';
+let curSub  = { product: 'rank', dimension: 'brand' };
+
+window.addEventListener('load', loadData);
+
+async function loadData() {
+  document.getElementById('loadingArea').style.display = 'block';
+  document.getElementById('mainContent').style.display = 'none';
+  document.getElementById('errorMsg').style.display = 'none';
+
+  try {
+    const res = await fetch(CSV_URL + '?t=' + Date.now());
+    if (!res.ok) throw new Error('無法讀取資料（' + res.status + '）');
+    const text = await res.text();
+    allData = parseCSV(text);
+
+    if (allData.length === 0) throw new Error('資料檔案是空的');
+
+    const dates = [...new Set(allData.map(r => r.date))].sort();
+    const earliestDate = dates[0];
+    const latestDate = dates[dates.length - 1];
+
+    const startInput = document.getElementById('startDate');
+    const endInput = document.getElementById('endDate');
+    startInput.value = toInputDate(earliestDate);
+    endInput.value = toInputDate(latestDate);
+    startInput.max = endInput.max = new Date().toISOString().split('T')[0];
+
+    document.getElementById('lastUpdate').textContent = '最後載入：' + new Date().toLocaleTimeString('zh-TW');
+    document.getElementById('csvLastUpdate').textContent = `資料範圍：${earliestDate} ～ ${latestDate}`;
+
+    document.getElementById('loadingArea').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'block';
+    renderCurrentView();
+
+  } catch(e) {
+    document.getElementById('loadingArea').style.display = 'none';
+    const errEl = document.getElementById('errorMsg');
+    errEl.style.display = 'block';
+    errEl.textContent = '⚠️ 載入失敗：' + e.message + '（資料可能還未產生，請稍後重試）';
+  }
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^﻿/,''));
+  return lines.slice(1).map(line => {
+    const vals = line.split(',');
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = (vals[i] || '').trim());
+    return obj;
+  }).filter(r => r.date);
+}
+
+// date字串格式為 YYYY/MM/DD，<input type=date> 需要 YYYY-MM-DD
+function toInputDate(d) { return (d || '').replace(/\//g, '-'); }
+function toDataDate(d) { return (d || '').replace(/-/g, '/'); }
+
+function selectQuickRange(days, btn) {
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const dates = [...new Set(allData.map(r => r.date))].sort();
+  if (dates.length === 0) return;
+  const latestDate = dates[dates.length - 1];
+
+  if (days === 'all') {
+    document.getElementById('startDate').value = toInputDate(dates[0]);
+    document.getElementById('endDate').value = toInputDate(latestDate);
+  } else {
+    const parts = latestDate.split('/').map(Number);
+    const end = new Date(parts[0], parts[1]-1, parts[2]);
+    const start = new Date(end);
+    start.setDate(start.getDate() - (days - 1));
+    document.getElementById('startDate').value = start.toISOString().split('T')[0];
+    document.getElementById('endDate').value = end.toISOString().split('T')[0];
+  }
+  renderCurrentView();
+}
+
+function onManualDateChange() {
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  renderCurrentView();
+}
+
+// 回傳目前期間篩選後的資料（依 startDate ~ endDate，皆為 YYYY/MM/DD 字串比較）
+function getFilteredData() {
+  const start = toDataDate(document.getElementById('startDate').value);
+  const end   = toDataDate(document.getElementById('endDate').value);
+  return allData.filter(r => {
+    if (start && r.date < start) return false;
+    if (end && r.date > end) return false;
+    return true;
+  });
+}
+
+function selectMainTab(main) {
+  curMain = main;
+  document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.dataset.main === main));
+  document.getElementById('tabs-product').style.display = main === 'product' ? 'flex' : 'none';
+  document.getElementById('tabs-dimension').style.display = main === 'dimension' ? 'flex' : 'none';
+  renderCurrentView();
+}
+
+function selectSubTab(main, sub) {
+  curMain = main;
+  curSub[main] = sub;
+  document.querySelectorAll(`#tabs-${main} .sub-tab`).forEach(t => t.classList.toggle('active', t.dataset.sub === sub));
+  renderCurrentView();
+}
+
+function renderCurrentView() {
+  const sub = curSub[curMain];
+  document.querySelectorAll('.view-panel').forEach(p => p.style.display = 'none');
+  const panel = document.getElementById('view-' + sub);
+  if (panel) panel.style.display = 'block';
+
+  const data = getFilteredData();
+  // 階段2、3會依 sub 呼叫對應的 render 函式，目前先維持 placeholder
+  if (typeof RENDERERS !== 'undefined' && RENDERERS[sub]) {
+    RENDERERS[sub](data);
+  }
+}
+
+// 階段2、3會在這裡逐步填入各 view 的 render 函式，例如：
+// const RENDERERS = { rank: renderRank, history: renderHistory, brand: renderBrand, ... };
+</script>
+</body>
+</html>
