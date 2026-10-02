@@ -78,6 +78,14 @@ tbody td{padding:9px 14px;vertical-align:middle;}
 .prod-brand{font-size:11px;color:var(--text-dim);}
 .qty{font-family:'DM Mono',monospace;font-size:12px;}
 .zero{color:var(--text-dim);}
+.slot-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700;white-space:nowrap;}
+.tag-0000{background:#f1f5f9;color:#64748b;}
+.tag-0700{background:var(--green-lt);color:var(--green);}
+.tag-1100{background:var(--blue-lt);color:var(--blue);}
+.tag-1400{background:#ede9fe;color:#7c3aed;}
+.tag-1800{background:var(--orange-lt);color:var(--orange);}
+.tag-2200{background:#fce7f3;color:var(--momo);}
+.disc-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;background:var(--orange-lt);color:var(--orange);}
 
 /* 統計卡 */
 .stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}
@@ -168,8 +176,8 @@ tbody td{padding:9px 14px;vertical-align:middle;}
     </div>
 
     <!-- 內容區：各子頁籤對應一個 view -->
-    <div id="view-rank" class="view-panel"><div class="placeholder"><div class="big">🚧</div>商品排行榜 — 階段2開發</div></div>
-    <div id="view-history" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>商品履歷查詢 — 階段2開發</div></div>
+    <div id="view-rank" class="view-panel"></div>
+    <div id="view-history" class="view-panel" style="display:none"></div>
     <div id="view-brand" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>品牌排行榜 — 階段3開發</div></div>
     <div id="view-slot" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>檔期整體表現比較 — 階段3開發</div></div>
     <div id="view-weekday" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>星期效應 — 階段3開發</div></div>
@@ -320,8 +328,211 @@ function renderCurrentView() {
   }
 }
 
-// 階段2、3會在這裡逐步填入各 view 的 render 函式，例如：
-// const RENDERERS = { rank: renderRank, history: renderHistory, brand: renderBrand, ... };
+function slotTagClass(slot) {
+  const map = {'00:00':'tag-0000','07:00':'tag-0700','11:00':'tag-1100','14:00':'tag-1400','18:00':'tag-1800','22:00':'tag-2200'};
+  return map[slot] || 'tag-0700';
+}
+
+// ── 商品分析：共用 ── 將期間內資料依 icode 彙總
+function buildProductSummary(data) {
+  const map = {};
+  data.forEach(r => {
+    const icode = r.icode;
+    if (!icode) return;
+    if (!map[icode]) {
+      map[icode] = { icode, name: r.name, brand: r.brand, listings: 0, totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0, lastDate: r.date };
+    }
+    const m = map[icode];
+    const sold = parseInt(r.sold) || 0;
+    const price = parseFloat(r.price) || 0;
+    const rate = parseFloat(r.sell_rate) || 0;
+    m.listings += 1;
+    m.totalSold += sold;
+    m.totalRevenue += sold * price;
+    m.rateSum += rate;
+    if (r.sold_out === '是') m.soldOutCount += 1;
+    if (r.date >= m.lastDate) { m.lastDate = r.date; m.name = r.name; m.brand = r.brand; }
+  });
+  return Object.values(map).map(m => ({ ...m, avgRate: m.listings ? (m.rateSum / m.listings) : 0 }));
+}
+
+// ── 商品排行榜 ──
+let rankSortKey = 'totalSold';
+const RANK_SORT_OPTIONS = [
+  { key: 'totalSold',    label: '依總銷售量' },
+  { key: 'listings',     label: '依上架次數' },
+  { key: 'avgRate',      label: '依平均售出率' },
+  { key: 'totalRevenue', label: '依期間營收' },
+];
+
+function selectRankSort(key) {
+  rankSortKey = key;
+  renderRank(getFilteredData());
+}
+
+function gotoHistory(icode) {
+  historySelectedIcode = icode;
+  selectSubTab('product', 'history');
+}
+
+function renderRank(data) {
+  const summary = buildProductSummary(data);
+  const totalListings = summary.reduce((s, m) => s + m.listings, 0);
+  const totalSold = summary.reduce((s, m) => s + m.totalSold, 0);
+  const totalRevenue = summary.reduce((s, m) => s + m.totalRevenue, 0);
+
+  const sorted = [...summary].sort((a, b) => b[rankSortKey] - a[rankSortKey]);
+  const sortBtns = RANK_SORT_OPTIONS.map(o =>
+    `<button class="quick-btn ${o.key === rankSortKey ? 'active' : ''}" onclick="selectRankSort('${o.key}')">${o.label}</button>`
+  ).join('');
+
+  const rows = sorted.slice(0, 100).map((m, i) => `
+    <tr>
+      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
+      <td><div class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" onclick="gotoHistory('${m.icode}')" title="點擊查看完整履歷">${m.name}</div><div class="prod-brand">${m.brand}</div></td>
+      <td class="qty">${m.listings}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${m.totalSold}</td>
+      <td class="qty">${m.avgRate.toFixed(1)}%</td>
+      <td class="qty">${m.soldOutCount > 0 ? m.soldOutCount : '<span class="zero">0</span>'}</td>
+      <td class="qty">$${Math.round(m.totalRevenue).toLocaleString('zh-TW')}</td>
+      <td class="qty">${m.lastDate}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('view-rank').innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">商品種數</div><div class="sc-ico">🛒</div></div><div class="sc-val" style="color:var(--blue)">${summary.length}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">總上架次數</div><div class="sc-ico">📋</div></div><div class="sc-val" style="color:var(--text-mid)">${totalListings}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">總銷售量</div><div class="sc-ico">📦</div></div><div class="sc-val" style="color:var(--green)">${totalSold}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">期間總營收</div><div class="sc-ico">💰</div></div><div class="sc-val" style="color:var(--momo)">$${Math.round(totalRevenue).toLocaleString('zh-TW')}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><div class="card-dot" style="background:var(--blue)"></div>商品排行榜</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">${sortBtns}</div>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>#</th><th>商品名稱</th><th>上架次數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th><th>最後上架日</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:30px">此期間無資料</td></tr>'}</tbody>
+      </table></div>
+      ${sorted.length > 100 ? `<div style="padding:10px 16px;font-size:11px;color:var(--text-dim)">僅顯示前100項（共${sorted.length}項，可縮小期間範圍聚焦查看）</div>` : ''}
+    </div>
+  `;
+}
+
+// ── 商品履歷查詢 ──
+let historySearchText = '';
+let historySelectedIcode = null;
+
+function renderHistory(data) {
+  const panel = document.getElementById('view-history');
+  panel.innerHTML = `
+    <div class="card">
+      <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--blue)"></div>商品履歷查詢</div></div>
+      <div style="padding:16px">
+        <input type="text" id="historySearchInput" class="search-box" placeholder="輸入商品名稱、品牌或商品編號搜尋…" value="${historySearchText.replace(/"/g, '&quot;')}" oninput="onHistorySearchInput(this.value)">
+        <div id="historySearchResults" style="margin-top:10px"></div>
+      </div>
+    </div>
+    <div id="historyDetail"></div>
+  `;
+  document.getElementById('historySearchInput').focus();
+  updateHistorySearchResults(data);
+  if (historySelectedIcode) renderHistoryDetail(data);
+}
+
+function onHistorySearchInput(val) {
+  historySearchText = val;
+  updateHistorySearchResults(getFilteredData());
+}
+
+function updateHistorySearchResults(data) {
+  const resultsEl = document.getElementById('historySearchResults');
+  if (!resultsEl) return;
+  const q = historySearchText.trim().toLowerCase();
+  if (!q) {
+    resultsEl.innerHTML = historySelectedIcode ? '' : '<div style="color:var(--text-dim);font-size:12px">輸入關鍵字開始搜尋…</div>';
+    return;
+  }
+  const summary = buildProductSummary(data);
+  const matches = summary.filter(m =>
+    (m.name || '').toLowerCase().includes(q) ||
+    (m.brand || '').toLowerCase().includes(q) ||
+    (m.icode || '').includes(q)
+  ).sort((a, b) => b.totalSold - a.totalSold).slice(0, 10);
+
+  if (matches.length === 0) {
+    resultsEl.innerHTML = '<div style="color:var(--text-dim);font-size:12px">期間內查無符合的商品</div>';
+    return;
+  }
+  resultsEl.innerHTML = matches.map(m => `
+    <div style="padding:8px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;background:var(--bg)"
+         onmouseover="this.style.background='var(--blue-lt)'" onmouseout="this.style.background='var(--bg)'"
+         onclick="selectHistoryProduct('${m.icode}')">
+      <span><span class="prod-name">${m.name}</span> <span class="prod-brand">（${m.brand}）</span></span>
+      <span style="color:var(--text-dim);font-size:11px;white-space:nowrap">期間內上架${m.listings}次・售出${m.totalSold}件</span>
+    </div>
+  `).join('');
+}
+
+function selectHistoryProduct(icode) {
+  historySelectedIcode = icode;
+  renderHistoryDetail(getFilteredData());
+}
+
+function renderHistoryDetail(data) {
+  const detailEl = document.getElementById('historyDetail');
+  if (!detailEl) return;
+  const rows = data.filter(r => r.icode === historySelectedIcode)
+    .sort((a, b) => { if (a.date !== b.date) return b.date.localeCompare(a.date); return b.slot.localeCompare(a.slot); });
+
+  if (rows.length === 0) {
+    detailEl.innerHTML = '<div class="placeholder" style="padding:30px"><div class="big">🔍</div>此期間內查無這個商品的上架紀錄</div>';
+    return;
+  }
+
+  const first = rows[0];
+  const totalSold = rows.reduce((s, r) => s + (parseInt(r.sold) || 0), 0);
+  const avgRate = (rows.reduce((s, r) => s + (parseFloat(r.sell_rate) || 0), 0) / rows.length).toFixed(1);
+  const soldOutCount = rows.filter(r => r.sold_out === '是').length;
+
+  const trs = rows.map(r => {
+    const mid = (r.mid_qty !== undefined && r.mid_qty !== '') ? r.mid_qty : '-';
+    return `<tr>
+      <td class="qty">${r.date}</td>
+      <td><span class="slot-tag ${slotTagClass(r.slot)}">${r.slot}</span></td>
+      <td><span class="disc-badge">${r.discount}</span></td>
+      <td class="qty">$${r.price}</td>
+      <td class="qty">${r.qty_open}</td>
+      <td class="qty">${mid}</td>
+      <td class="qty">${r.qty_close}</td>
+      <td class="qty" style="font-weight:700;color:${(parseInt(r.sold)||0)>0?'var(--blue)':'var(--text-dim)'}">${r.sold || '-'}</td>
+      <td class="qty">${r.sell_rate}%</td>
+      <td>${r.sold_out === '是' ? '🔥' : ''}</td>
+    </tr>`;
+  }).join('');
+
+  detailEl.innerHTML = `
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-top:16px">
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">期間上架次數</div><div class="sc-ico">📋</div></div><div class="sc-val" style="color:var(--blue)">${rows.length}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">期間總銷售量</div><div class="sc-ico">📦</div></div><div class="sc-val" style="color:var(--green)">${totalSold}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">平均售出率</div><div class="sc-ico">📊</div></div><div class="sc-val" style="color:var(--text-mid)">${avgRate}%</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">售完次數</div><div class="sc-ico">🔥</div></div><div class="sc-val" style="color:var(--red)">${soldOutCount}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><div class="card-dot" style="background:var(--momo)"></div>${first.name}（${first.brand}）上架履歷</div>
+        <div class="sort-note">依日期新到舊排序</div>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>日期</th><th>時段</th><th>折扣</th><th>活動價</th><th>開檔</th><th>中段</th><th>結束前</th><th>售出</th><th>售出率</th><th>狀態</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+const RENDERERS = { rank: renderRank, history: renderHistory };
 </script>
 </body>
 </html>
