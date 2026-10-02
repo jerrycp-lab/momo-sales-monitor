@@ -178,10 +178,10 @@ tbody td{padding:9px 14px;vertical-align:middle;}
     <!-- 內容區：各子頁籤對應一個 view -->
     <div id="view-rank" class="view-panel"></div>
     <div id="view-history" class="view-panel" style="display:none"></div>
-    <div id="view-brand" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>品牌排行榜 — 階段3開發</div></div>
-    <div id="view-slot" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>檔期整體表現比較 — 階段3開發</div></div>
-    <div id="view-weekday" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>星期效應 — 階段3開發</div></div>
-    <div id="view-price" class="view-panel" style="display:none"><div class="placeholder"><div class="big">🚧</div>價格帶表現 — 階段3開發</div></div>
+    <div id="view-brand" class="view-panel" style="display:none"></div>
+    <div id="view-slot" class="view-panel" style="display:none"></div>
+    <div id="view-weekday" class="view-panel" style="display:none"></div>
+    <div id="view-price" class="view-panel" style="display:none"></div>
 
   </div>
 </div>
@@ -532,7 +532,225 @@ function renderHistoryDetail(data) {
   `;
 }
 
-const RENDERERS = { rank: renderRank, history: renderHistory };
+// ── 維度排行：共用 ── 依任意 key 彙總
+function aggregateByKey(data, keyFn) {
+  const map = {};
+  data.forEach(r => {
+    const key = keyFn(r);
+    if (key === null || key === undefined || key === '') return;
+    if (!map[key]) map[key] = { key, listings: 0, icodes: new Set(), totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0 };
+    const g = map[key];
+    const sold = parseInt(r.sold) || 0;
+    const price = parseFloat(r.price) || 0;
+    const rate = parseFloat(r.sell_rate) || 0;
+    g.listings += 1;
+    g.icodes.add(r.icode);
+    g.totalSold += sold;
+    g.totalRevenue += sold * price;
+    g.rateSum += rate;
+    if (r.sold_out === '是') g.soldOutCount += 1;
+  });
+  return Object.values(map).map(g => ({
+    key: g.key,
+    listings: g.listings,
+    productCount: g.icodes.size,
+    totalSold: g.totalSold,
+    totalRevenue: g.totalRevenue,
+    avgRate: g.listings ? g.rateSum / g.listings : 0,
+    soldOutCount: g.soldOutCount,
+    soldOutRate: g.listings ? (g.soldOutCount / g.listings * 100) : 0,
+  }));
+}
+
+function miniBar(value, max, color) {
+  const w = max > 0 ? Math.min(Math.round(value / max * 100), 100) : 0;
+  return `<div style="display:flex;align-items:center;gap:8px">
+    <div style="flex:1;height:14px;background:var(--border);border-radius:4px;overflow:hidden;max-width:140px">
+      <div style="height:100%;width:${w}%;background:${color}"></div>
+    </div>
+    <div style="font-size:11px;font-family:'DM Mono',monospace;min-width:42px;color:var(--text-mid)">${value.toFixed(1)}%</div>
+  </div>`;
+}
+
+function fmtMoney(v) { return '$' + Math.round(v).toLocaleString('zh-TW'); }
+
+// ── 品牌排行榜 ──
+let brandSortKey = 'totalSold';
+const BRAND_SORT_OPTIONS = [
+  { key: 'totalSold',    label: '依總銷售量' },
+  { key: 'totalRevenue', label: '依期間營收' },
+  { key: 'avgRate',      label: '依平均售出率' },
+  { key: 'listings',     label: '依上架次數' },
+];
+
+function selectBrandSort(key) {
+  brandSortKey = key;
+  renderBrand(getFilteredData());
+}
+
+function renderBrand(data) {
+  const summary = aggregateByKey(data, r => r.brand || '（無品牌）');
+  const sorted = [...summary].sort((a, b) => b[brandSortKey] - a[brandSortKey]);
+  const sortBtns = BRAND_SORT_OPTIONS.map(o =>
+    `<button class="quick-btn ${o.key === brandSortKey ? 'active' : ''}" onclick="selectBrandSort('${o.key}')">${o.label}</button>`
+  ).join('');
+
+  const rows = sorted.slice(0, 100).map((s, i) => `
+    <tr>
+      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
+      <td class="prod-name">${s.key}</td>
+      <td class="qty">${s.productCount}</td>
+      <td class="qty">${s.listings}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${s.totalSold}</td>
+      <td>${miniBar(s.avgRate, 100, 'var(--blue)')}</td>
+      <td class="qty">${s.soldOutCount}（${s.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(s.totalRevenue)}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('view-brand').innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><div class="card-dot" style="background:var(--purple)"></div>品牌排行榜</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">${sortBtns}</div>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>#</th><th>品牌</th><th>商品種數</th><th>上架次數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:30px">此期間無資料</td></tr>'}</tbody>
+      </table></div>
+      ${sorted.length > 100 ? `<div style="padding:10px 16px;font-size:11px;color:var(--text-dim)">僅顯示前100個品牌（共${sorted.length}個）</div>` : ''}
+    </div>
+  `;
+}
+
+// ── 檔期整體表現比較 ──
+const SLOT_ORDER = ['00:00', '07:00', '11:00', '14:00', '18:00', '22:00'];
+
+function renderSlot(data) {
+  const summary = aggregateByKey(data, r => r.slot);
+  const map = {}; summary.forEach(s => map[s.key] = s);
+  const rows = SLOT_ORDER.map(slot => map[slot] || { key: slot, listings: 0, productCount: 0, totalSold: 0, totalRevenue: 0, avgRate: 0, soldOutCount: 0, soldOutRate: 0 });
+
+  const best = [...rows].filter(r => r.listings > 0).sort((a, b) => b.avgRate - a.avgRate)[0];
+
+  const trs = rows.map(r => `
+    <tr>
+      <td><span class="slot-tag ${slotTagClass(r.key)}">${r.key}</span></td>
+      <td class="qty">${r.listings}</td>
+      <td class="qty">${r.productCount}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${r.totalSold}</td>
+      <td>${miniBar(r.avgRate, 100, 'var(--green)')}</td>
+      <td class="qty">${r.soldOutCount}（${r.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(r.totalRevenue)}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('view-slot').innerHTML = `
+    ${best ? `<div class="sum-row" style="background:var(--green-lt);margin-bottom:16px;padding:12px 16px;border-radius:var(--radius)">
+      <span style="color:var(--green);font-weight:700">💡 期間內表現最好的檔期：${best.key}</span>
+      <span style="color:var(--text-mid)">平均售出率 ${best.avgRate.toFixed(1)}%</span>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--green)"></div>檔期整體表現比較</div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>檔期</th><th>上架次數</th><th>商品種數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+// ── 星期效應 ──
+const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+const WEEKDAY_LABELS = { 1: '週一', 2: '週二', 3: '週三', 4: '週四', 5: '週五', 6: '週六', 0: '週日' };
+
+function weekdayKey(dateStr) {
+  const parts = (dateStr || '').split('/').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2]).getDay();
+}
+
+function renderWeekday(data) {
+  const summary = aggregateByKey(data, r => weekdayKey(r.date));
+  const map = {}; summary.forEach(s => map[s.key] = s);
+  const rows = WEEKDAY_ORDER.map(k => map[k] || { key: k, listings: 0, productCount: 0, totalSold: 0, totalRevenue: 0, avgRate: 0, soldOutCount: 0, soldOutRate: 0 });
+
+  const best = [...rows].filter(r => r.listings > 0).sort((a, b) => b.avgRate - a.avgRate)[0];
+
+  const trs = rows.map(r => {
+    const isWeekend = r.key === 0 || r.key === 6;
+    return `<tr style="${isWeekend ? 'background:var(--bg)' : ''}">
+      <td class="prod-name">${WEEKDAY_LABELS[r.key]}</td>
+      <td class="qty">${r.listings}</td>
+      <td class="qty">${r.productCount}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${r.totalSold}</td>
+      <td>${miniBar(r.avgRate, 100, 'var(--orange)')}</td>
+      <td class="qty">${r.soldOutCount}（${r.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(r.totalRevenue)}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('view-weekday').innerHTML = `
+    ${best ? `<div class="sum-row" style="background:var(--orange-lt);margin-bottom:16px;padding:12px 16px;border-radius:var(--radius)">
+      <span style="color:var(--orange);font-weight:700">💡 期間內表現最好的星期：${WEEKDAY_LABELS[best.key]}</span>
+      <span style="color:var(--text-mid)">平均售出率 ${best.avgRate.toFixed(1)}%</span>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--orange)"></div>星期效應（灰底為週末）</div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>星期</th><th>上架次數</th><th>商品種數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+// ── 價格帶表現 ──
+function priceBandIndex(price) {
+  const p = parseFloat(price);
+  if (isNaN(p)) return -1;
+  return PRICE_BANDS.findIndex(b => p >= b.min && p <= b.max);
+}
+
+function renderPrice(data) {
+  const summary = aggregateByKey(data, r => priceBandIndex(r.price));
+  const map = {}; summary.forEach(s => map[s.key] = s);
+  const totalListings = data.length || 1;
+  const rows = PRICE_BANDS.map((b, idx) => {
+    const s = map[idx] || { listings: 0, productCount: 0, totalSold: 0, totalRevenue: 0, avgRate: 0, soldOutCount: 0, soldOutRate: 0 };
+    return { ...s, label: b.label };
+  });
+
+  const best = [...rows].filter(r => r.listings > 0).sort((a, b) => b.avgRate - a.avgRate)[0];
+
+  const trs = rows.map(r => `
+    <tr>
+      <td class="prod-name">${r.label}</td>
+      <td class="qty">${r.listings}（${(r.listings / totalListings * 100).toFixed(0)}%）</td>
+      <td class="qty">${r.productCount}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${r.totalSold}</td>
+      <td>${miniBar(r.avgRate, 100, 'var(--momo)')}</td>
+      <td class="qty">${r.soldOutCount}（${r.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(r.totalRevenue)}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('view-price').innerHTML = `
+    ${best ? `<div class="sum-row" style="background:var(--momo-lt);margin-bottom:16px;padding:12px 16px;border-radius:var(--radius)">
+      <span style="color:var(--momo);font-weight:700">💡 期間內表現最好的價格帶：${best.label}</span>
+      <span style="color:var(--text-mid)">平均售出率 ${best.avgRate.toFixed(1)}%</span>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--momo)"></div>價格帶表現</div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>價格帶</th><th>上架次數（佔比）</th><th>商品種數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+const RENDERERS = { rank: renderRank, history: renderHistory, brand: renderBrand, slot: renderSlot, weekday: renderWeekday, price: renderPrice };
 </script>
 </body>
 </html>
