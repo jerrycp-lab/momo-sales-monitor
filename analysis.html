@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 程式作業，交叉分析</title><meta name="robots" content="noindex, nofollow">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap');
+:root {
+  --bg:#f0f4f8; --surface:#fff; --border:#e2e8f0; --border2:#cbd5e1;
+  --text:#1e293b; --text-mid:#475569; --text-dim:#94a3b8;
+  --blue:#2563eb; --blue-lt:#dbeafe;
+  --green:#16a34a; --green-lt:#dcfce7;
+  --orange:#ea580c; --orange-lt:#ffedd5;
+  --red:#dc2626; --red-lt:#fee2e2;
+  --momo:#e84393; --momo-lt:#fce7f3;
+  --purple:#7c3aed; --purple-lt:#ede9fe;
+  --radius:10px; --shadow:0 1px 3px rgba(0,0,0,.08);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-serif;font-size:13px;}
+::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+
+/* TOPBAR */
+.topbar{background:#1a3a5c;color:#fff;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;}
+.topbar-logo{font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px;}
+.topbar-logo .icon{width:32px;height:32px;border-radius:8px;background:var(--purple);display:flex;align-items:center;justify-content:center;font-size:16px;}
+.topbar-nav{display:flex;gap:6px;margin-left:18px;}
+.topbar-nav a{color:rgba(255,255,255,.65);text-decoration:none;font-size:12px;padding:6px 12px;border-radius:7px;transition:all .15s;}
+.topbar-nav a:hover{background:rgba(255,255,255,.08);color:#fff;}
+.topbar-nav a.active{background:rgba(255,255,255,.14);color:#fff;font-weight:700;}
+.topbar-right{display:flex;align-items:center;gap:16px;font-size:12px;color:rgba(255,255,255,.6);}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#4ade80;animation:blink 2s infinite;display:inline-block;margin-right:4px;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* CONTENT */
+.content{padding:20px 24px;}
+
+/* 查詢列（期間篩選） */
+.query-bar{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow);flex-wrap:wrap;}
+.q-label{font-size:13px;font-weight:700;color:var(--text-mid);white-space:nowrap;}
+.q-date{padding:6px 12px;border-radius:7px;border:1px solid var(--border2);font-family:inherit;font-size:13px;color:var(--text);background:var(--bg);outline:none;cursor:pointer;}
+.q-date:focus{border-color:var(--blue);}
+.q-sep{color:var(--text-dim);}
+.quick-btn{padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;font-family:inherit;color:var(--text-dim);transition:all .15s;font-weight:600;}
+.quick-btn:hover{border-color:var(--purple);color:var(--purple);}
+.quick-btn.active{background:var(--purple);color:#fff;border-color:var(--purple);}
+.q-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+.reload-btn{padding:6px 14px;border-radius:7px;background:var(--blue);color:#fff;border:none;font-size:12px;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;}
+.reload-btn:hover{background:#1d4ed8;}
+.last-update{font-size:11px;color:var(--text-dim);}
+
+/* 主分類頁籤 */
+.main-tabs{display:flex;gap:8px;margin-bottom:12px;}
+.main-tab{padding:10px 20px;border-radius:var(--radius);font-size:14px;font-weight:700;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--text-mid);box-shadow:var(--shadow);transition:all .15s;}
+.main-tab:hover{border-color:var(--purple);color:var(--purple);}
+.main-tab.active{background:var(--purple);color:#fff;border-color:var(--purple);}
+
+/* 子頁籤 */
+.sub-tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;}
+.sub-tab{padding:7px 16px;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--text-dim);transition:all .15s;}
+.sub-tab:hover{border-color:var(--momo);color:var(--momo);}
+.sub-tab.active{background:var(--momo);color:#fff;border-color:var(--momo);}
+
+/* 卡片／表格（沿用 dashboard 風格） */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px;}
+.card-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);}
+.card-title{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px;}
+.card-dot{width:7px;height:7px;border-radius:50%;}
+.sort-note{font-size:11px;color:var(--text-dim);}
+table{width:100%;border-collapse:collapse;}
+thead th{padding:9px 14px;text-align:left;font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;background:#f8fafc;border-bottom:1px solid var(--border);font-weight:500;}
+tbody tr{border-bottom:1px solid var(--border);transition:background .12s;}
+tbody tr:last-child{border-bottom:none;}
+tbody tr:hover{background:#f8fafc;}
+tbody td{padding:9px 14px;vertical-align:middle;}
+.prod-name{font-weight:600;font-size:12px;}
+.prod-brand{font-size:11px;color:var(--text-dim);}
+.qty{font-family:'DM Mono',monospace;font-size:12px;}
+.zero{color:var(--text-dim);}
+.slot-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700;white-space:nowrap;}
+.tag-0000{background:#f1f5f9;color:#64748b;}
+.tag-0700{background:var(--green-lt);color:var(--green);}
+.tag-1100{background:var(--blue-lt);color:var(--blue);}
+.tag-1400{background:#ede9fe;color:#7c3aed;}
+.tag-1800{background:var(--orange-lt);color:var(--orange);}
+.tag-2200{background:#fce7f3;color:var(--momo);}
+.disc-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;background:var(--orange-lt);color:var(--orange);}
+
+/* 統計卡 */
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow);}
+.sc-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
+.sc-label{font-size:11px;color:var(--text-dim);}
+.sc-ico{font-size:18px;}
+.sc-val{font-size:22px;font-weight:700;font-family:'DM Mono',monospace;}
+.sc-note{font-size:11px;color:var(--text-dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* placeholder */
+.placeholder{padding:60px 20px;text-align:center;color:var(--text-dim);}
+.placeholder .big{font-size:32px;margin-bottom:10px;}
+
+/* 載入狀態 */
+.loading{text-align:center;padding:60px;color:var(--text-dim);}
+.loading-spin{font-size:32px;animation:spin 1s linear infinite;display:inline-block;margin-bottom:12px;}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.error-msg{background:var(--red-lt);color:var(--red);padding:16px;border-radius:var(--radius);margin-bottom:16px;font-size:13px;}
+
+/* 搜尋框（商品履歷查詢用） */
+.search-box{padding:7px 12px;border-radius:7px;border:1px solid var(--border2);font-family:inherit;font-size:13px;color:var(--text);background:var(--bg);outline:none;min-width:220px;}
+.search-box:focus{border-color:var(--blue);}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo">
+    <div class="icon">📊</div>
+    AI 程式作業，交叉分析
+    <div class="topbar-nav">
+      <a href="dashboard.html">即時監控</a>
+      <a href="analysis.html" class="active">交叉分析</a>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span><span class="live-dot"></span>即時資料</span>
+    <span id="lastUpdate">載入中...</span>
+  </div>
+</div>
+
+<div class="content">
+
+  <!-- 期間篩選列 -->
+  <div class="query-bar">
+    <span class="q-label">📅 期間</span>
+    <input type="date" id="startDate" class="q-date" onchange="onManualDateChange()">
+    <span class="q-sep">至</span>
+    <input type="date" id="endDate" class="q-date" onchange="onManualDateChange()">
+    <div style="display:flex;gap:5px;flex-wrap:wrap;" id="quickBtns">
+      <button class="quick-btn" onclick="selectQuickRange(7,this)">近7天</button>
+      <button class="quick-btn" onclick="selectQuickRange(30,this)">近30天</button>
+      <button class="quick-btn active" onclick="selectQuickRange('all',this)">全部期間</button>
+    </div>
+    <div class="q-right">
+      <span class="last-update" id="csvLastUpdate"></span>
+      <button class="reload-btn" onclick="loadData()">🔄 重新載入</button>
+    </div>
+  </div>
+
+  <div id="errorMsg" class="error-msg" style="display:none"></div>
+  <div id="loadingArea" class="loading">
+    <div class="loading-spin">⏳</div>
+    <div>載入資料中...</div>
+  </div>
+
+  <div id="mainContent" style="display:none">
+
+    <!-- 主分類頁籤 -->
+    <div class="main-tabs">
+      <div class="main-tab active" data-main="product" onclick="selectMainTab('product')">🛒 商品分析</div>
+      <div class="main-tab" data-main="dimension" onclick="selectMainTab('dimension')">📈 維度排行</div>
+    </div>
+
+    <!-- 商品分析：子頁籤 -->
+    <div id="tabs-product" class="sub-tabs">
+      <div class="sub-tab active" data-sub="rank" onclick="selectSubTab('product','rank')">商品排行榜</div>
+      <div class="sub-tab" data-sub="history" onclick="selectSubTab('product','history')">商品履歷查詢</div>
+    </div>
+
+    <!-- 維度排行：子頁籤 -->
+    <div id="tabs-dimension" class="sub-tabs" style="display:none">
+      <div class="sub-tab active" data-sub="brand" onclick="selectSubTab('dimension','brand')">品牌排行榜</div>
+      <div class="sub-tab" data-sub="slot" onclick="selectSubTab('dimension','slot')">檔期整體表現比較</div>
+      <div class="sub-tab" data-sub="weekday" onclick="selectSubTab('dimension','weekday')">星期效應</div>
+      <div class="sub-tab" data-sub="price" onclick="selectSubTab('dimension','price')">價格帶表現</div>
+    </div>
+
+    <!-- 內容區：各子頁籤對應一個 view -->
+    <div id="view-rank" class="view-panel"></div>
+    <div id="view-history" class="view-panel" style="display:none"></div>
+    <div id="view-brand" class="view-panel" style="display:none"></div>
+    <div id="view-slot" class="view-panel" style="display:none"></div>
+    <div id="view-weekday" class="view-panel" style="display:none"></div>
+    <div id="view-price" class="view-panel" style="display:none"></div>
+
+  </div>
+</div>
+
+<script>
+// ── 設定：你的 GitHub 帳號和 repo 名稱 ──
+const GITHUB_USER = 'jerrycp-lab';
+const GITHUB_REPO = 'momo-sales-monitor';
+const CSV_URL = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main/snapshots/all_results.csv`;
+// ─────────────────────────────────────────
+
+// 價格帶分界（依實際資料分布統計後決定，見討論記錄）
+const PRICE_BANDS = [
+  {label:'<500',        min:0,     max:499},
+  {label:'500–1,500',   min:500,   max:1499},
+  {label:'1,500–5,000', min:1500,  max:4999},
+  {label:'5,000–15,000',min:5000,  max:14999},
+  {label:'15,000+',     min:15000, max:Infinity},
+];
+
+let allData = [];
+let curMain = 'product';
+let curSub  = { product: 'rank', dimension: 'brand' };
+
+window.addEventListener('load', loadData);
+
+async function loadData() {
+  document.getElementById('loadingArea').style.display = 'block';
+  document.getElementById('mainContent').style.display = 'none';
+  document.getElementById('errorMsg').style.display = 'none';
+
+  try {
+    const res = await fetch(CSV_URL + '?t=' + Date.now());
+    if (!res.ok) throw new Error('無法讀取資料（' + res.status + '）');
+    const text = await res.text();
+    allData = parseCSV(text);
+
+    if (allData.length === 0) throw new Error('資料檔案是空的');
+
+    const dates = [...new Set(allData.map(r => r.date))].sort();
+    const earliestDate = dates[0];
+    const latestDate = dates[dates.length - 1];
+
+    const startInput = document.getElementById('startDate');
+    const endInput = document.getElementById('endDate');
+    startInput.value = toInputDate(earliestDate);
+    endInput.value = toInputDate(latestDate);
+    startInput.max = endInput.max = new Date().toISOString().split('T')[0];
+
+    document.getElementById('lastUpdate').textContent = '最後載入：' + new Date().toLocaleTimeString('zh-TW');
+    document.getElementById('csvLastUpdate').textContent = `資料範圍：${earliestDate} ～ ${latestDate}`;
+
+    document.getElementById('loadingArea').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'block';
+    renderCurrentView();
+
+  } catch(e) {
+    document.getElementById('loadingArea').style.display = 'none';
+    const errEl = document.getElementById('errorMsg');
+    errEl.style.display = 'block';
+    errEl.textContent = '⚠️ 載入失敗：' + e.message + '（資料可能還未產生，請稍後重試）';
+  }
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^﻿/,''));
+  return lines.slice(1).map(line => {
+    const vals = line.split(',');
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = (vals[i] || '').trim());
+    return obj;
+  }).filter(r => r.date);
+}
+
+// date字串格式為 YYYY/MM/DD，<input type=date> 需要 YYYY-MM-DD
+function toInputDate(d) { return (d || '').replace(/\//g, '-'); }
+function toDataDate(d) { return (d || '').replace(/-/g, '/'); }
+
+function selectQuickRange(days, btn) {
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const dates = [...new Set(allData.map(r => r.date))].sort();
+  if (dates.length === 0) return;
+  const latestDate = dates[dates.length - 1];
+
+  if (days === 'all') {
+    document.getElementById('startDate').value = toInputDate(dates[0]);
+    document.getElementById('endDate').value = toInputDate(latestDate);
+  } else {
+    const parts = latestDate.split('/').map(Number);
+    const end = new Date(parts[0], parts[1]-1, parts[2]);
+    const start = new Date(end);
+    start.setDate(start.getDate() - (days - 1));
+    document.getElementById('startDate').value = start.toISOString().split('T')[0];
+    document.getElementById('endDate').value = end.toISOString().split('T')[0];
+  }
+  renderCurrentView();
+}
+
+function onManualDateChange() {
+  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  renderCurrentView();
+}
+
+// 回傳目前期間篩選後的資料（依 startDate ~ endDate，皆為 YYYY/MM/DD 字串比較）
+function getFilteredData() {
+  const start = toDataDate(document.getElementById('startDate').value);
+  const end   = toDataDate(document.getElementById('endDate').value);
+  return allData.filter(r => {
+    if (start && r.date < start) return false;
+    if (end && r.date > end) return false;
+    return true;
+  });
+}
+
+function selectMainTab(main) {
+  curMain = main;
+  document.querySelectorAll('.main-tab').forEach(t => t.classList.toggle('active', t.dataset.main === main));
+  document.getElementById('tabs-product').style.display = main === 'product' ? 'flex' : 'none';
+  document.getElementById('tabs-dimension').style.display = main === 'dimension' ? 'flex' : 'none';
+  renderCurrentView();
+}
+
+function selectSubTab(main, sub) {
+  curMain = main;
+  curSub[main] = sub;
+  document.querySelectorAll(`#tabs-${main} .sub-tab`).forEach(t => t.classList.toggle('active', t.dataset.sub === sub));
+  renderCurrentView();
+}
+
+function renderCurrentView() {
+  const sub = curSub[curMain];
+  document.querySelectorAll('.view-panel').forEach(p => p.style.display = 'none');
+  const panel = document.getElementById('view-' + sub);
+  if (panel) panel.style.display = 'block';
+
+  const data = getFilteredData();
+  // 階段2、3會依 sub 呼叫對應的 render 函式，目前先維持 placeholder
+  if (typeof RENDERERS !== 'undefined' && RENDERERS[sub]) {
+    RENDERERS[sub](data);
+  }
+}
+
+function slotTagClass(slot) {
+  const map = {'00:00':'tag-0000','07:00':'tag-0700','11:00':'tag-1100','14:00':'tag-1400','18:00':'tag-1800','22:00':'tag-2200'};
+  return map[slot] || 'tag-0700';
+}
+
+// ── 商品分析：共用 ── 將期間內資料依 icode 彙總
+function buildProductSummary(data) {
+  const map = {};
+  data.forEach(r => {
+    const icode = r.icode;
+    if (!icode) return;
+    if (!map[icode]) {
+      map[icode] = { icode, name: r.name, brand: r.brand, listings: 0, totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0, lastDate: r.date };
+    }
+    const m = map[icode];
+    const sold = parseInt(r.sold) || 0;
+    const price = parseFloat(r.price) || 0;
+    const rate = parseFloat(r.sell_rate) || 0;
+    m.listings += 1;
+    m.totalSold += sold;
+    m.totalRevenue += sold * price;
+    m.rateSum += rate;
+    if (r.sold_out === '是') m.soldOutCount += 1;
+    if (r.date >= m.lastDate) { m.lastDate = r.date; m.name = r.name; m.brand = r.brand; }
+  });
+  return Object.values(map).map(m => ({ ...m, avgRate: m.listings ? (m.rateSum / m.listings) : 0 }));
+}
+
+// ── 商品排行榜 ──
+let rankSortKey = 'totalSold';
+const RANK_SORT_OPTIONS = [
+  { key: 'totalSold',    label: '依總銷售量' },
+  { key: 'listings',     label: '依上架次數' },
+  { key: 'avgRate',      label: '依平均售出率' },
+  { key: 'totalRevenue', label: '依期間營收' },
+];
+
+function selectRankSort(key) {
+  rankSortKey = key;
+  renderRank(getFilteredData());
+}
+
+function gotoHistory(icode) {
+  historySelectedIcode = icode;
+  selectSubTab('product', 'history');
+}
+
+function renderRank(data) {
+  const summary = buildProductSummary(data);
+  const totalListings = summary.reduce((s, m) => s + m.listings, 0);
+  const totalSold = summary.reduce((s, m) => s + m.totalSold, 0);
+  const totalRevenue = summary.reduce((s, m) => s + m.totalRevenue, 0);
+
+  const sorted = [...summary].sort((a, b) => b[rankSortKey] - a[rankSortKey]);
+  const sortBtns = RANK_SORT_OPTIONS.map(o =>
+    `<button class="quick-btn ${o.key === rankSortKey ? 'active' : ''}" onclick="selectRankSort('${o.key}')">${o.label}</button>`
+  ).join('');
+
+  const rows = sorted.slice(0, 100).map((m, i) => `
+    <tr>
+      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
+      <td><div class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" onclick="gotoHistory('${m.icode}')" title="點擊查看完整履歷">${m.name}</div><div class="prod-brand">${m.brand}</div></td>
+      <td class="qty">${m.listings}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${m.totalSold}</td>
+      <td class="qty">${m.avgRate.toFixed(1)}%</td>
+      <td class="qty">${m.soldOutCount > 0 ? m.soldOutCount : '<span class="zero">0</span>'}</td>
+      <td class="qty">$${Math.round(m.totalRevenue).toLocaleString('zh-TW')}</td>
+      <td class="qty">${m.lastDate}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('view-rank').innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">商品種數</div><div class="sc-ico">🛒</div></div><div class="sc-val" style="color:var(--blue)">${summary.length}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">總上架次數</div><div class="sc-ico">📋</div></div><div class="sc-val" style="color:var(--text-mid)">${totalListings}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">總銷售量</div><div class="sc-ico">📦</div></div><div class="sc-val" style="color:var(--green)">${totalSold}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">期間總營收</div><div class="sc-ico">💰</div></div><div class="sc-val" style="color:var(--momo)">$${Math.round(totalRevenue).toLocaleString('zh-TW')}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><div class="card-dot" style="background:var(--blue)"></div>商品排行榜</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">${sortBtns}</div>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>#</th><th>商品名稱</th><th>上架次數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th><th>最後上架日</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:30px">此期間無資料</td></tr>'}</tbody>
+      </table></div>
+      ${sorted.length > 100 ? `<div style="padding:10px 16px;font-size:11px;color:var(--text-dim)">僅顯示前100項（共${sorted.length}項，可縮小期間範圍聚焦查看）</div>` : ''}
+    </div>
+  `;
+}
+
+// ── 商品履歷查詢 ──
+let historySearchText = '';
+let historySelectedIcode = null;
+
+function renderHistory(data) {
+  const panel = document.getElementById('view-history');
+  panel.innerHTML = `
+    <div class="card">
+      <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--blue)"></div>商品履歷查詢</div></div>
+      <div style="padding:16px">
+        <input type="text" id="historySearchInput" class="search-box" placeholder="輸入商品名稱、品牌或商品編號搜尋…" value="${historySearchText.replace(/"/g, '&quot;')}" oninput="onHistorySearchInput(this.value)">
+        <div id="historySearchResults" style="margin-top:10px"></div>
+      </div>
+    </div>
+    <div id="historyDetail"></div>
+  `;
+  document.getElementById('historySearchInput').focus();
+  updateHistorySearchResults(data);
+  if (historySelectedIcode) renderHistoryDetail(data);
+}
+
+function onHistorySearchInput(val) {
+  historySearchText = val;
+  updateHistorySearchResults(getFilteredData());
+}
+
+function updateHistorySearchResults(data) {
+  const resultsEl = document.getElementById('historySearchResults');
+  if (!resultsEl) return;
+  const q = historySearchText.trim().toLowerCase();
+  if (!q) {
+    resultsEl.innerHTML = historySelectedIcode ? '' : '<div style="color:var(--text-dim);font-size:12px">輸入關鍵字開始搜尋…</div>';
+    return;
+  }
+  const summary = buildProductSummary(data);
+  const matches = summary.filter(m =>
+    (m.name || '').toLowerCase().includes(q) ||
+    (m.brand || '').toLowerCase().includes(q) ||
+    (m.icode || '').includes(q)
+  ).sort((a, b) => b.totalSold - a.totalSold).slice(0, 10);
+
+  if (matches.length === 0) {
+    resultsEl.innerHTML = '<div style="color:var(--text-dim);font-size:12px">期間內查無符合的商品</div>';
+    return;
+  }
+  resultsEl.innerHTML = matches.map(m => `
+    <div style="padding:8px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;background:var(--bg)"
+         onmouseover="this.style.background='var(--blue-lt)'" onmouseout="this.style.background='var(--bg)'"
+         onclick="selectHistoryProduct('${m.icode}')">
+      <span><span class="prod-name">${m.name}</span> <span class="prod-brand">（${m.brand}）</span></span>
+      <span style="color:var(--text-dim);font-size:11px;white-space:nowrap">期間內上架${m.listings}次・售出${m.totalSold}件</span>
+    </div>
+  `).join('');
+}
+
+function selectHistoryProduct(icode) {
+  historySelectedIcode = icode;
+  renderHistoryDetail(getFilteredData());
+}
+
+function renderHistoryDetail(data) {
+  const detailEl = document.getElementById('historyDetail');
+  if (!detailEl) return;
+  const rows = data.filter(r => r.icode === historySelectedIcode)
+    .sort((a, b) => { if (a.date !== b.date) return b.date.localeCompare(a.date); return b.slot.localeCompare(a.slot); });
+
+  if (rows.length === 0) {
+    detailEl.innerHTML = '<div class="placeholder" style="padding:30px"><div class="big">🔍</div>此期間內查無這個商品的上架紀錄</div>';
+    return;
+  }
+
+  const first = rows[0];
+  const totalSold = rows.reduce((s, r) => s + (parseInt(r.sold) || 0), 0);
+  const avgRate = (rows.reduce((s, r) => s + (parseFloat(r.sell_rate) || 0), 0) / rows.length).toFixed(1);
+  const soldOutCount = rows.filter(r => r.sold_out === '是').length;
+
+  const trs = rows.map(r => {
+    const mid = (r.mid_qty !== undefined && r.mid_qty !== '') ? r.mid_qty : '-';
+    return `<tr>
+      <td class="qty">${r.date}</td>
+      <td><span class="slot-tag ${slotTagClass(r.slot)}">${r.slot}</span></td>
+      <td><span class="disc-badge">${r.discount}</span></td>
+      <td class="qty">$${r.price}</td>
+      <td class="qty">${r.qty_open}</td>
+      <td class="qty">${mid}</td>
+      <td class="qty">${r.qty_close}</td>
+      <td class="qty" style="font-weight:700;color:${(parseInt(r.sold)||0)>0?'var(--blue)':'var(--text-dim)'}">${r.sold || '-'}</td>
+      <td class="qty">${r.sell_rate}%</td>
+      <td>${r.sold_out === '是' ? '🔥' : ''}</td>
+    </tr>`;
+  }).join('');
+
+  detailEl.innerHTML = `
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-top:16px">
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">期間上架次數</div><div class="sc-ico">📋</div></div><div class="sc-val" style="color:var(--blue)">${rows.length}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">期間總銷售量</div><div class="sc-ico">📦</div></div><div class="sc-val" style="color:var(--green)">${totalSold}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">平均售出率</div><div class="sc-ico">📊</div></div><div class="sc-val" style="color:var(--text-mid)">${avgRate}%</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">售完次數</div><div class="sc-ico">🔥</div></div><div class="sc-val" style="color:var(--red)">${soldOutCount}</div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><div class="card-dot" style="background:var(--momo)"></div>${first.name}（${first.brand}）上架履歷</div>
+        <div class="sort-note">依日期新到舊排序</div>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>日期</th><th>時段</th><th>折扣</th><th>活動價</th><th>開檔</th><th>中段</th><th>結束前</th><th>售出</th><th>售出率</th><th>狀態</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+// ── 維度排行：共用 ── 依任意 key 彙總
+function aggregateByKey(data, keyFn) {
+  const map = {};
+  data.forEach(r => {
+    const key = keyFn(r);
+    if (key === null || key === undefined || key === '') return;
+    if (!map[key]) map[key] = { key, listings: 0, icodes: new Set(), totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0 };
+    const g = map[key];
+    const sold = parseInt(r.sold) || 0;
+    const price = parseFloat(r.price) || 0;
+    const rate = parseFloat(r.sell_rate) || 0;
+    g.listings += 1;
+    g.icodes.add(r.icode);
+    g.totalSold += sold;
+    g.totalRevenue += sold * price;
+    g.rateSum += rate;
+    if (r.sold_out === '是') g.soldOutCount += 1;
+  });
+  return Object.values(map).map(g => ({
+    key: g.key,
+    listings: g.listings,
+    productCount: g.icodes.size,
+    totalSold: g.totalSold,
+    totalRevenue: g.totalRevenue,
+    avgRate: g.listings ? g.rateSum / g.listings : 0,
+    soldOutCount: g.soldOutCount,
+    soldOutRate: g.listings ? (g.soldOutCount / g.listings * 100) : 0,
+  }));
+}
+
+function miniBar(value, max, color) {
+  const w = max > 0 ? Math.min(Math.round(value / max * 100), 100) : 0;
+  return `<div style="display:flex;align-items:center;gap:8px">
+    <div style="flex:1;height:14px;background:var(--border);border-radius:4px;overflow:hidden;max-width:140px">
+      <div style="height:100%;width:${w}%;background:${color}"></div>
+    </div>
+    <div style="font-size:11px;font-family:'DM Mono',monospace;min-width:42px;color:var(--text-mid)">${value.toFixed(1)}%</div>
+  </div>`;
+}
+
+function fmtMoney(v) { return '$' + Math.round(v).toLocaleString('zh-TW'); }
+
+// ── 品牌排行榜 ──
+let brandSortKey = 'totalSold';
+const BRAND_SORT_OPTIONS = [
+  { key: 'totalSold',    label: '依總銷售量' },
+  { key: 'totalRevenue', label: '依期間營收' },
+  { key: 'avgRate',      label: '依平均售出率' },
+  { key: 'listings',     label: '依上架次數' },
+];
+
+function selectBrandSort(key) {
+  brandSortKey = key;
+  renderBrand(getFilteredData());
+}
+
+function renderBrand(data) {
+  const summary = aggregateByKey(data, r => r.brand || '（無品牌）');
+  const sorted = [...summary].sort((a, b) => b[brandSortKey] - a[brandSortKey]);
+  const sortBtns = BRAND_SORT_OPTIONS.map(o =>
+    `<button class="quick-btn ${o.key === brandSortKey ? 'active' : ''}" onclick="selectBrandSort('${o.key}')">${o.label}</button>`
+  ).join('');
+
+  const rows = sorted.slice(0, 100).map((s, i) => `
+    <tr>
+      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
+      <td class="prod-name">${s.key}</td>
+      <td class="qty">${s.productCount}</td>
+      <td class="qty">${s.listings}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${s.totalSold}</td>
+      <td>${miniBar(s.avgRate, 100, 'var(--blue)')}</td>
+      <td class="qty">${s.soldOutCount}（${s.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(s.totalRevenue)}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('view-brand').innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><div class="card-dot" style="background:var(--purple)"></div>品牌排行榜</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">${sortBtns}</div>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>#</th><th>品牌</th><th>商品種數</th><th>上架次數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:30px">此期間無資料</td></tr>'}</tbody>
+      </table></div>
+      ${sorted.length > 100 ? `<div style="padding:10px 16px;font-size:11px;color:var(--text-dim)">僅顯示前100個品牌（共${sorted.length}個）</div>` : ''}
+    </div>
+  `;
+}
+
+// ── 檔期整體表現比較 ──
+const SLOT_ORDER = ['00:00', '07:00', '11:00', '14:00', '18:00', '22:00'];
+
+function renderSlot(data) {
+  const summary = aggregateByKey(data, r => r.slot);
+  const map = {}; summary.forEach(s => map[s.key] = s);
+  const rows = SLOT_ORDER.map(slot => map[slot] || { key: slot, listings: 0, productCount: 0, totalSold: 0, totalRevenue: 0, avgRate: 0, soldOutCount: 0, soldOutRate: 0 });
+
+  const best = [...rows].filter(r => r.listings > 0).sort((a, b) => b.avgRate - a.avgRate)[0];
+
+  const trs = rows.map(r => `
+    <tr>
+      <td><span class="slot-tag ${slotTagClass(r.key)}">${r.key}</span></td>
+      <td class="qty">${r.listings}</td>
+      <td class="qty">${r.productCount}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${r.totalSold}</td>
+      <td>${miniBar(r.avgRate, 100, 'var(--green)')}</td>
+      <td class="qty">${r.soldOutCount}（${r.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(r.totalRevenue)}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('view-slot').innerHTML = `
+    ${best ? `<div class="sum-row" style="background:var(--green-lt);margin-bottom:16px;padding:12px 16px;border-radius:var(--radius)">
+      <span style="color:var(--green);font-weight:700">💡 期間內表現最好的檔期：${best.key}</span>
+      <span style="color:var(--text-mid)">平均售出率 ${best.avgRate.toFixed(1)}%</span>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--green)"></div>檔期整體表現比較</div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>檔期</th><th>上架次數</th><th>商品種數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+// ── 星期效應 ──
+const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
+const WEEKDAY_LABELS = { 1: '週一', 2: '週二', 3: '週三', 4: '週四', 5: '週五', 6: '週六', 0: '週日' };
+
+function weekdayKey(dateStr) {
+  const parts = (dateStr || '').split('/').map(Number);
+  if (parts.length !== 3 || parts.some(isNaN)) return null;
+  return new Date(parts[0], parts[1] - 1, parts[2]).getDay();
+}
+
+function renderWeekday(data) {
+  const summary = aggregateByKey(data, r => weekdayKey(r.date));
+  const map = {}; summary.forEach(s => map[s.key] = s);
+  const rows = WEEKDAY_ORDER.map(k => map[k] || { key: k, listings: 0, productCount: 0, totalSold: 0, totalRevenue: 0, avgRate: 0, soldOutCount: 0, soldOutRate: 0 });
+
+  const best = [...rows].filter(r => r.listings > 0).sort((a, b) => b.avgRate - a.avgRate)[0];
+
+  const trs = rows.map(r => {
+    const isWeekend = r.key === 0 || r.key === 6;
+    return `<tr style="${isWeekend ? 'background:var(--bg)' : ''}">
+      <td class="prod-name">${WEEKDAY_LABELS[r.key]}</td>
+      <td class="qty">${r.listings}</td>
+      <td class="qty">${r.productCount}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${r.totalSold}</td>
+      <td>${miniBar(r.avgRate, 100, 'var(--orange)')}</td>
+      <td class="qty">${r.soldOutCount}（${r.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(r.totalRevenue)}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('view-weekday').innerHTML = `
+    ${best ? `<div class="sum-row" style="background:var(--orange-lt);margin-bottom:16px;padding:12px 16px;border-radius:var(--radius)">
+      <span style="color:var(--orange);font-weight:700">💡 期間內表現最好的星期：${WEEKDAY_LABELS[best.key]}</span>
+      <span style="color:var(--text-mid)">平均售出率 ${best.avgRate.toFixed(1)}%</span>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--orange)"></div>星期效應（灰底為週末）</div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>星期</th><th>上架次數</th><th>商品種數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+// ── 價格帶表現 ──
+function priceBandIndex(price) {
+  const p = parseFloat(price);
+  if (isNaN(p)) return -1;
+  return PRICE_BANDS.findIndex(b => p >= b.min && p <= b.max);
+}
+
+function renderPrice(data) {
+  const summary = aggregateByKey(data, r => priceBandIndex(r.price));
+  const map = {}; summary.forEach(s => map[s.key] = s);
+  const totalListings = data.length || 1;
+  const rows = PRICE_BANDS.map((b, idx) => {
+    const s = map[idx] || { listings: 0, productCount: 0, totalSold: 0, totalRevenue: 0, avgRate: 0, soldOutCount: 0, soldOutRate: 0 };
+    return { ...s, label: b.label };
+  });
+
+  const best = [...rows].filter(r => r.listings > 0).sort((a, b) => b.avgRate - a.avgRate)[0];
+
+  const trs = rows.map(r => `
+    <tr>
+      <td class="prod-name">${r.label}</td>
+      <td class="qty">${r.listings}（${(r.listings / totalListings * 100).toFixed(0)}%）</td>
+      <td class="qty">${r.productCount}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${r.totalSold}</td>
+      <td>${miniBar(r.avgRate, 100, 'var(--momo)')}</td>
+      <td class="qty">${r.soldOutCount}（${r.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(r.totalRevenue)}</td>
+    </tr>
+  `).join('');
+
+  document.getElementById('view-price').innerHTML = `
+    ${best ? `<div class="sum-row" style="background:var(--momo-lt);margin-bottom:16px;padding:12px 16px;border-radius:var(--radius)">
+      <span style="color:var(--momo);font-weight:700">💡 期間內表現最好的價格帶：${best.label}</span>
+      <span style="color:var(--text-mid)">平均售出率 ${best.avgRate.toFixed(1)}%</span>
+    </div>` : ''}
+    <div class="card">
+      <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--momo)"></div>價格帶表現</div></div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>價格帶</th><th>上架次數（佔比）</th><th>商品種數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${trs}</tbody>
+      </table></div>
+    </div>
+  `;
+}
+
+const RENDERERS = { rank: renderRank, history: renderHistory, brand: renderBrand, slot: renderSlot, weekday: renderWeekday, price: renderPrice };
+</script>
+</body>
+</html>
