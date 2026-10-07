@@ -137,9 +137,9 @@ tbody td{padding:9px 14px;vertical-align:middle;}
     <span class="q-sep">至</span>
     <input type="date" id="endDate" class="q-date" onchange="onManualDateChange()">
     <div style="display:flex;gap:5px;flex-wrap:wrap;" id="quickBtns">
-      <button class="quick-btn" onclick="selectQuickRange(7,this)">近7天</button>
+      <button class="quick-btn active" onclick="selectQuickRange(7,this)">近7天</button>
       <button class="quick-btn" onclick="selectQuickRange(30,this)">近30天</button>
-      <button class="quick-btn active" onclick="selectQuickRange('all',this)">全部期間</button>
+      <button class="quick-btn" onclick="selectQuickRange('month',this)">本月</button>
     </div>
     <div class="q-right">
       <span class="last-update" id="csvLastUpdate"></span>
@@ -227,9 +227,9 @@ async function loadData() {
 
     const startInput = document.getElementById('startDate');
     const endInput = document.getElementById('endDate');
-    startInput.value = toInputDate(earliestDate);
-    endInput.value = toInputDate(latestDate);
-    startInput.max = endInput.max = new Date().toISOString().split('T')[0];
+    startInput.max = endInput.max = fmtLocalDate(new Date());
+    applyQuickRange(7);
+    document.querySelectorAll('#quickBtns .quick-btn').forEach((b, i) => b.classList.toggle('active', i === 0));
 
     document.getElementById('lastUpdate').textContent = '最後載入：' + new Date().toLocaleTimeString('zh-TW');
     document.getElementById('csvLastUpdate').textContent = `資料範圍：${earliestDate} ～ ${latestDate}`;
@@ -262,30 +262,40 @@ function parseCSV(text) {
 function toInputDate(d) { return (d || '').replace(/\//g, '-'); }
 function toDataDate(d) { return (d || '').replace(/-/g, '/'); }
 
-function selectQuickRange(days, btn) {
-  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
+// 以本地時間格式化為 YYYY-MM-DD（避免 toISOString 的 UTC 時區偏移）
+function fmtLocalDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
 
+// 設定起訖日期：數字=以資料最新日往前推N天；'month'=本月1日至今天
+function applyQuickRange(range) {
   const dates = [...new Set(allData.map(r => r.date))].sort();
   if (dates.length === 0) return;
   const latestDate = dates[dates.length - 1];
 
-  if (days === 'all') {
-    document.getElementById('startDate').value = toInputDate(dates[0]);
-    document.getElementById('endDate').value = toInputDate(latestDate);
+  if (range === 'month') {
+    const today = new Date();
+    document.getElementById('startDate').value = fmtLocalDate(new Date(today.getFullYear(), today.getMonth(), 1));
+    document.getElementById('endDate').value = fmtLocalDate(today);
   } else {
     const parts = latestDate.split('/').map(Number);
     const end = new Date(parts[0], parts[1]-1, parts[2]);
     const start = new Date(end);
-    start.setDate(start.getDate() - (days - 1));
-    document.getElementById('startDate').value = start.toISOString().split('T')[0];
-    document.getElementById('endDate').value = end.toISOString().split('T')[0];
+    start.setDate(start.getDate() - (range - 1));
+    document.getElementById('startDate').value = fmtLocalDate(start);
+    document.getElementById('endDate').value = fmtLocalDate(end);
   }
+}
+
+function selectQuickRange(range, btn) {
+  document.querySelectorAll('#quickBtns .quick-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  applyQuickRange(range);
   renderCurrentView();
 }
 
 function onManualDateChange() {
-  document.querySelectorAll('.quick-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#quickBtns .quick-btn').forEach(b => b.classList.remove('active'));
   renderCurrentView();
 }
 
