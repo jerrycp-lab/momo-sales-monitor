@@ -130,16 +130,16 @@ def log_failure(icode: str, reason: str):
 
 
 def current_slot_products() -> dict:
-    """讀最新一份開檔快照（當檔商品），回傳 {品號: 品名}"""
-    opens = sorted(glob(os.path.join(OUTPUT_DIR, "momo_*_open.csv")))
-    if not opens:
-        return {}
+    """讀最新 3 份開檔快照（當檔 + 已提前抓的下一檔），回傳 {品號: 品名}"""
+    opens = sorted(glob(os.path.join(OUTPUT_DIR, "momo_*_open.csv")))[-3:]
     products = {}
-    with open(opens[-1], encoding="utf-8-sig") as f:
-        for row in csv.DictReader(f):
-            if row.get("icode"):
-                products[row["icode"]] = f"{row.get('brand', '')} {row.get('name', '')}".strip()
-    print(f"📂 當檔快照：{os.path.basename(opens[-1])}（{len(products)} 個商品）")
+    for path in reversed(opens):
+        with open(path, encoding="utf-8-sig") as f:
+            for row in csv.DictReader(f):
+                if row.get("icode") and row["icode"] not in products:
+                    products[row["icode"]] = f"{row.get('brand', '')} {row.get('name', '')}".strip()
+    if opens:
+        print(f"📂 開檔快照：{'、'.join(os.path.basename(o) for o in opens)}（共 {len(products)} 個商品）")
     return products
 
 
