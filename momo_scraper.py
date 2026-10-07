@@ -1,6 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-momo 限時搶購 - 商品資料抓取程式 v9
+momo 限時搶購 - 商品資料抓取程式 v10
+
+v10 新增內容（2026/10）：
+  - 開檔資料改為「提前抓」：每次 open（以及 close）執行時，順便把
+    「下一檔」的商品與數量先存成下一檔的 _open.csv。
+    例如 11:03 就先存好 14:00 檔的開檔資料，避免大活動開搶第一分鐘
+    就被秒殺、開檔後才抓會抓不到原始數量。
+    close（結束前5分）會再更新一次，讓數字更接近真正開檔前的狀態。
+  - 開檔後 3 分鐘的 open 執行改為「補抓」：只有提前抓的資料裡數量
+    是 0 或空白的商品、以及提前抓時還沒出現的商品，才用這次的資料補上；
+    如果完全沒有提前抓到（例如跨日的 00:00 檔），就照舊整檔重抓。
+  - 修正數量解析：「倒數：1,951組」以前只會讀到 1，現在正確讀成 1951
+  - 當檔區塊改用頁面上的時段文字比對，找不到才退回用第 1 個區塊
+  - 快照多一欄 source：pre = 提前抓、open = 開檔後抓
 
 v9 新增內容：
   - 抓取失敗自動記錄：當頁面載入逾時（重試後仍失敗）、找不到
@@ -44,6 +57,11 @@ GOTO_TIMEOUT_MS = 45000   # 頁面載入逾時時間
 MAX_RETRIES     = 2       # 最多重試 2 次（總共嘗試 3 次）
 RETRY_WAIT_MS   = 5000    # 每次重試前等待 5 秒
 
+# 哪些檢查點要順便提前抓「下一檔」的開檔資料
+PRECAPTURE_AT = ("open", "close")
+
+FIELDNAMES = ["icode","brand","name","discount","old_price","price","qty","scraped_at","source"]
+
 SLOTS = [
     (0,  7,  "0000"),
     (7,  11, "0700"),
@@ -62,6 +80,68 @@ def get_current_slot() -> str:
     return "2200"
 
 
+def next_slot_of(slot_code: str, date_str: str):
+    """回傳下一檔的 (時段代碼, 日期)。22:00 的下一檔是隔天的 00:00"""
+    codes = [s[2] for s in SLOTS]
+    idx = codes.index(slot_code)
+    if idx + 1 < len(codes):
+        return codes[idx + 1], date_str
+    next_day = datetime.strptime(date_str, "%Y%m%d") + timedelta(days=1)
+    return codes[0], next_day.strftime("%Y%m%d")
+
+
+def find_block(mentals, slot_code: str):
+    """用區塊上的時段文字（例如「本檔時段 14:00 開搶」）找出指定時段的區塊"""
+    label = f"{slot_code[:2]}:{slot_code[2:]}"
+    for div in mentals:
+        try:
+            el = div.query_selector(".time")
+            text = el.inner_text() if el else ""
+        except Exception:
+            text = ""
+        if label in text:
+            return div
+    return None
+
+
+def snapshot_path(date_str: str, slot_code: str, checkpoint: str) -> str:
+    return os.path.join(OUTPUT_DIR, f"momo_{date_str}_{slot_code}_{checkpoint}.csv")
+
+
+def load_snapshot_rows(filepath: str) -> list:
+    if not os.path.exists(filepath):
+        return []
+    with open(filepath, encoding="utf-8-sig") as f:
+        return [r for r in csv.DictReader(f) if r.get("icode")]
+
+
+def qty_missing(value) -> bool:
+    """數量是空白或 0，視為需要補抓"""
+    text = str(value).strip() if value is not None else ""
+    return text == "" or text == "0"
+
+
+def merge_open(pre_rows: list, fresh: list):
+    """提前抓的資料為主，只補數量為 0/空白的商品，以及新出現的商品"""
+    fresh_map = {p["icode"]: p for p in fresh}
+    merged, filled, added = [], 0, 0
+    seen = set()
+    for row in pre_rows:
+        icode = row["icode"]
+        seen.add(icode)
+        if qty_missing(row.get("qty")) and icode in fresh_map and not qty_missing(fresh_map[icode].get("qty")):
+            merged.append(fresh_map[icode])
+            filled += 1
+        else:
+            row.setdefault("source", "pre")
+            merged.append(row)
+    for p in fresh:
+        if p["icode"] not in seen:
+            merged.append(p)
+            added += 1
+    return merged, filled, added
+
+
 def log_failure(date_str: str, slot_code: str, checkpoint: str, reason: str):
     """把抓取失敗事件記錄到 snapshots/scrape_failures.csv，方便之後離線查看"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -75,7 +155,7 @@ def log_failure(date_str: str, slot_code: str, checkpoint: str, reason: str):
     print(f"  📝 已記錄失敗事件 → {FAILURE_LOG}（原因：{reason}）")
 
 
-def parse_items(items, scraped_at: str) -> list:
+def parse_items(items, scraped_at: str, source: str = "open") -> list:
     products = []
     for li in items:
         try:
@@ -90,7 +170,8 @@ def parse_items(items, scraped_at: str) -> list:
                 el = li.query_selector(sel)
                 return el.inner_text().strip() if el else ""
 
-            qty_match = re.search(r"(\d+)", get_txt(".last"))
+            # 「倒數：1,951組」要先拿掉千分位逗號再取數字
+            qty_match = re.search(r"(\d+)", get_txt(".last").replace(",", "").replace("，", ""))
             qty       = int(qty_match.group(1)) if qty_match else None
 
             old_price = get_txt(".oldPrice")
@@ -105,6 +186,7 @@ def parse_items(items, scraped_at: str) -> list:
                 "price":      re.sub(r"[^\d]", "", price)     or None,
                 "qty":        qty,
                 "scraped_at": scraped_at,
+                "source":     source,
             })
         except Exception as e:
             print(f"  ⚠️ 跳過商品：{e}")
@@ -121,9 +203,8 @@ def save_csv(products: list, date_str: str, slot_code: str, checkpoint: str, tim
     filename = f"momo_{date_str}_{slot_code}_{checkpoint}.csv"
     filepath = os.path.join(OUTPUT_DIR, filename)
 
-    fieldnames = ["icode","brand","name","discount","old_price","price","qty","scraped_at"]
     with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(products)
 
@@ -159,6 +240,8 @@ def run(checkpoint: str):
 
     products  = []
     time_text = ""
+    next_products = []
+    next_slot, next_date = next_slot_of(cur_slot, date_str)
 
     try:
         with sync_playwright() as p:
@@ -183,11 +266,11 @@ def run(checkpoint: str):
                     print("  ⚠️ 等待頁面逾時，繼續嘗試...")
                 page.wait_for_timeout(3000)
 
-                # 抓取所有 .MENTAL 區塊，第1個（mentals[0]）即為當前時段
+                # 抓取所有 .MENTAL 區塊；先用時段文字找當前時段，找不到才用第1個
                 mentals = page.query_selector_all("#CustExclbuy div.MENTAL")
 
                 if len(mentals) >= 1:
-                    cur_div     = mentals[0]
+                    cur_div     = find_block(mentals, cur_slot) or mentals[0]
                     time_el_cur = cur_div.query_selector(".time")
                     time_text   = time_el_cur.inner_text().strip() if time_el_cur else ""
                     items       = cur_div.query_selector_all("li.box1")
@@ -198,6 +281,12 @@ def run(checkpoint: str):
                     print("  ⚠️ 找不到當前時段區塊")
                     log_failure(date_str, cur_slot, checkpoint, "no_mentals_found")
 
+                # 順便提前抓「下一檔」的開檔資料
+                if checkpoint in PRECAPTURE_AT:
+                    next_div = find_block(mentals, next_slot)
+                    if next_div is not None:
+                        next_products = parse_items(next_div.query_selector_all("li.box1"), scraped_at, source="pre")
+
             browser.close()
 
     except Exception as e:
@@ -205,7 +294,30 @@ def run(checkpoint: str):
         log_failure(date_str, cur_slot, checkpoint, f"unexpected_error:{type(e).__name__}")
 
     print()
-    save_csv(products, date_str, cur_slot, checkpoint, f"  ← {time_text}")
+    if checkpoint == "open":
+        # 開檔：若已有提前抓的資料，只補數量為 0/空白與新出現的商品
+        pre_rows = load_snapshot_rows(snapshot_path(date_str, cur_slot, "open"))
+        if pre_rows:
+            merged, filled, added = merge_open(pre_rows, products)
+            print(f"  📦 已有提前抓的開檔資料 {len(pre_rows)} 個商品 → 補抓數量 {filled} 個、新增商品 {added} 個")
+            save_csv(merged, date_str, cur_slot, checkpoint, f"  ← {time_text}")
+        else:
+            print("  📦 沒有提前抓的開檔資料，改用這次抓到的整檔資料")
+            save_csv(products, date_str, cur_slot, checkpoint, f"  ← {time_text}")
+    else:
+        save_csv(products, date_str, cur_slot, checkpoint, f"  ← {time_text}")
+
+    # 存下一檔的提前開檔資料（已經有開檔後資料的檔案不覆蓋；抓不到就保留舊的）
+    if checkpoint in PRECAPTURE_AT:
+        next_path = snapshot_path(next_date, next_slot, "open")
+        existing = load_snapshot_rows(next_path)
+        if not next_products:
+            print(f"  ⏭️ 頁面上還沒有下一檔（{next_slot}）的資料，開檔後再抓")
+        elif any(r.get("source") == "open" for r in existing):
+            print(f"  ⏭️ 下一檔（{next_slot}）已有開檔後資料，不覆蓋")
+        else:
+            print(f"  🔮 提前抓下一檔（{next_slot}）開檔資料：")
+            save_csv(next_products, next_date, next_slot, "open", "")
 
     return cur_slot
 
