@@ -286,7 +286,8 @@ function parseCSV(text, keyField = 'date') {
 // 這裡在顯示時推估還原，不改動原始 CSV。推估值一律以紅字標示。
 //   calc ：同一檔內數量不減反增（例如 開檔1 → 中段949），可確定開檔是千位數，
 //          以「千位整數」作為開檔推估值（例如 1 → 1,000），並重算售出與售出率
-//   doubt：同商品在別檔已確定是千位數，這一檔開檔也是個位數但無法從數字本身判斷
+//   doubt：同商品在別檔已確定是千位數，這一檔開檔也是個位數但無法從數字本身判斷，
+//          品項保留，開檔／中段／結束前／售出一律以 0 計
 const EST_LAST_OLD = { date: '2026/10/07', slot: '11:00' };
 
 function isOldParserRow(r) {
@@ -319,7 +320,12 @@ function fixTruncatedQty(rows) {
   rows.forEach(r => {
     if (r.est || !isOldParserRow(r) || !proven.has(r.icode)) return;
     const o = num(r.qty_open);
-    if (o !== null && o >= 1 && o <= 9) r.est = 'doubt';
+    if (o !== null && o >= 1 && o <= 9) {
+      // 存疑：品項保留，但數量無法還原，開檔／中段／結束前／售出一律以 0 計
+      r.est = 'doubt';
+      r.raw_text = `${r.qty_open} → ${r.mid_qty === '' ? '-' : r.mid_qty} → ${r.qty_close}`;
+      r.qty_open = '0'; r.mid_qty = '0'; r.qty_close = '0'; r.sold = '0'; r.sell_rate = '0.0';
+    }
   });
 }
 
@@ -332,7 +338,7 @@ function updateEstNotice(data) {
   if (!calc && !doubt) { el.style.display = 'none'; return; }
   el.style.display = 'block';
   el.innerHTML = `⚠️ 目前範圍內有 <b>${calc}</b> 筆開檔數量為推估值（舊版程式漏讀千位數，以千位整數還原，售出量為保守估計）`
-    + (doubt ? `，另有 <b>${doubt}</b> 筆數量存疑、無法推估` : '') + `。相關數字以紅字標示。`;
+    + (doubt ? `，另有 <b>${doubt}</b> 筆數量存疑、無法推估，數量與售出一律以 0 計、不計入平均售出率` : '') + `。相關數字以紅字標示。`;
 }
 
 // ── 品類篩選 ──
@@ -461,7 +467,7 @@ function buildProductSummary(data) {
     const icode = r.icode;
     if (!icode) return;
     if (!map[icode]) {
-      map[icode] = { icode, name: r.name, brand: r.brand, cat1: r.cat1, cat2: r.cat2, listings: 0, totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0, lastDate: r.date, estCount: 0, doubtCount: 0 };
+      map[icode] = { icode, name: r.name, brand: r.brand, cat1: r.cat1, cat2: r.cat2, listings: 0, totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0, lastDate: r.date, estCount: 0, doubtCount: 0, rateN: 0 };
     }
     const m = map[icode];
     if (r.est === 'calc') m.estCount += 1;
@@ -472,11 +478,11 @@ function buildProductSummary(data) {
     m.listings += 1;
     m.totalSold += sold;
     m.totalRevenue += sold * price;
-    m.rateSum += rate;
+    if (r.est !== 'doubt') { m.rateSum += rate; m.rateN += 1; }   // 存疑紀錄不計入平均售出率
     if (r.sold_out === '是') m.soldOutCount += 1;
     if (r.date >= m.lastDate) { m.lastDate = r.date; m.name = r.name; m.brand = r.brand; }
   });
-  return Object.values(map).map(m => ({ ...m, avgRate: m.listings ? (m.rateSum / m.listings) : 0 }));
+  return Object.values(map).map(m => ({ ...m, avgRate: m.rateN ? (m.rateSum / m.rateN) : 0 }));
 }
 
 // ── 商品排行榜 ──
@@ -617,7 +623,8 @@ function renderHistoryDetail(data) {
 
   const first = rows[0];
   const totalSold = rows.reduce((s, r) => s + (parseInt(r.sold) || 0), 0);
-  const avgRate = (rows.reduce((s, r) => s + (parseFloat(r.sell_rate) || 0), 0) / rows.length).toFixed(1);
+  const rateRows = rows.filter(r => r.est !== 'doubt');   // 存疑紀錄不計入平均售出率
+  const avgRate = (rateRows.length ? rateRows.reduce((s, r) => s + (parseFloat(r.sell_rate) || 0), 0) / rateRows.length : 0).toFixed(1);
   const soldOutCount = rows.filter(r => r.sold_out === '是').length;
 
   const trs = rows.map(r => {
@@ -628,11 +635,11 @@ function renderHistoryDetail(data) {
       <td><span class="slot-tag ${slotTagClass(r.slot)}">${r.slot}</span></td>
       <td><span class="disc-badge">${r.discount}</span></td>
       <td class="qty">$${r.price}</td>
-      <td class="qty" ${isCalc ? `style="color:var(--red);font-weight:700" title="原始紀錄為 ${r.qty_open_raw}（漏讀千位數），以千位整數推估"` : isDoubt ? 'style="color:var(--red)" title="同商品在其他檔期為千位數，這筆可能也漏讀千位數，無法推估"' : ''}>${isCalc ? '約' + fmtInt(r.qty_open) : r.qty_open + (isDoubt ? ' ?' : '')}</td>
-      <td class="qty" ${r.mid_est ? 'style="color:var(--red)" title="推估值"' : ''}>${r.mid_est ? '約' + fmtInt(mid) : mid}</td>
-      <td class="qty">${r.qty_close}</td>
-      <td class="qty" style="font-weight:700;color:${(isCalc || isDoubt) ? 'var(--red)' : (parseInt(r.sold)||0)>0?'var(--blue)':'var(--text-dim)'}" ${isCalc ? `title="原始紀錄為 ${r.sold_raw || 0}，依推估開檔量重算（保守估計）"` : ''}>${isCalc ? '約' + fmtInt(r.sold) : (r.sold || '-') + (isDoubt ? ' ?' : '')}</td>
-      <td class="qty" ${(isCalc || isDoubt) ? 'style="color:var(--red)"' : ''}>${r.sell_rate}%${isDoubt ? ' ?' : ''}</td>
+      <td class="qty" ${isCalc ? `style="color:var(--red);font-weight:700" title="原始紀錄為 ${r.qty_open_raw}（漏讀千位數），以千位整數推估"` : isDoubt ? `style="color:var(--red)" title="數量存疑（漏讀千位數、無法推估），以 0 計。原始紀錄：${r.raw_text}"` : ''}>${isCalc ? '約' + fmtInt(r.qty_open) : r.qty_open}</td>
+      <td class="qty" ${(r.mid_est || isDoubt) ? 'style="color:var(--red)"' : ''} ${r.mid_est ? 'title="推估值"' : ''}>${r.mid_est ? '約' + fmtInt(mid) : mid}</td>
+      <td class="qty" ${isDoubt ? 'style="color:var(--red)"' : ''}>${r.qty_close}</td>
+      <td class="qty" style="font-weight:700;color:${(isCalc || isDoubt) ? 'var(--red)' : (parseInt(r.sold)||0)>0?'var(--blue)':'var(--text-dim)'}" ${isCalc ? `title="原始紀錄為 ${r.sold_raw || 0}，依推估開檔量重算（保守估計）"` : ''}>${isCalc ? '約' + fmtInt(r.sold) : (r.sold || '-')}</td>
+      <td class="qty" ${(isCalc || isDoubt) ? 'style="color:var(--red)"' : ''} ${isDoubt ? 'title="不計入平均售出率"' : ''}>${isDoubt ? '不計' : r.sell_rate + '%'}</td>
       <td>${r.sold_out === '是' ? '🔥' : ''}</td>
     </tr>`;
   }).join('');
@@ -663,7 +670,7 @@ function aggregateByKey(data, keyFn) {
   data.forEach(r => {
     const key = keyFn(r);
     if (key === null || key === undefined || key === '') return;
-    if (!map[key]) map[key] = { key, listings: 0, icodes: new Set(), totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0 };
+    if (!map[key]) map[key] = { key, listings: 0, icodes: new Set(), totalSold: 0, totalRevenue: 0, rateSum: 0, rateN: 0, soldOutCount: 0 };
     const g = map[key];
     const sold = parseInt(r.sold) || 0;
     const price = parseFloat(r.price) || 0;
@@ -672,7 +679,7 @@ function aggregateByKey(data, keyFn) {
     g.icodes.add(r.icode);
     g.totalSold += sold;
     g.totalRevenue += sold * price;
-    g.rateSum += rate;
+    if (r.est !== 'doubt') { g.rateSum += rate; g.rateN += 1; }   // 存疑紀錄不計入平均售出率
     if (r.sold_out === '是') g.soldOutCount += 1;
   });
   return Object.values(map).map(g => ({
@@ -681,7 +688,7 @@ function aggregateByKey(data, keyFn) {
     productCount: g.icodes.size,
     totalSold: g.totalSold,
     totalRevenue: g.totalRevenue,
-    avgRate: g.listings ? g.rateSum / g.listings : 0,
+    avgRate: g.rateN ? g.rateSum / g.rateN : 0,
     soldOutCount: g.soldOutCount,
     soldOutRate: g.listings ? (g.soldOutCount / g.listings * 100) : 0,
   }));
