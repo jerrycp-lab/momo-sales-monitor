@@ -150,6 +150,7 @@ tbody td{padding:9px 14px;vertical-align:middle;}
     </div>
   </div>
 
+  <div id="estNotice" style="display:none;background:var(--red-lt);color:var(--red);padding:10px 16px;border-radius:var(--radius);margin-bottom:16px;font-size:12px"></div>
   <div id="errorMsg" class="error-msg" style="display:none"></div>
   <div id="loadingArea" class="loading">
     <div class="loading-spin">⏳</div>
@@ -228,6 +229,8 @@ async function loadData() {
 
     if (allData.length === 0) throw new Error('資料檔案是空的');
 
+    fixTruncatedQty(allData);
+
     // 品類對照表（momo 大類/中類）。檔案還沒產生也不影響其他分析
     let catMap = {};
     try {
@@ -276,6 +279,60 @@ function parseCSV(text, keyField = 'date') {
     headers.forEach((h, i) => obj[h] = (vals[i] || '').trim());
     return obj;
   }).filter(r => r[keyField]);
+}
+
+// ── 千位數推估 ──
+// 2026/10/07 11:00 檔（含）以前，舊版抓取程式把「倒數：1,951組」只讀成 1。
+// 這裡在顯示時推估還原，不改動原始 CSV。推估值一律以紅字標示。
+//   calc ：同一檔內數量不減反增（例如 開檔1 → 中段949），可確定開檔是千位數，
+//          以「千位整數」作為開檔推估值（例如 1 → 1,000），並重算售出與售出率
+//   doubt：同商品在別檔已確定是千位數，這一檔開檔也是個位數但無法從數字本身判斷
+const EST_LAST_OLD = { date: '2026/10/07', slot: '11:00' };
+
+function isOldParserRow(r) {
+  return r.date < EST_LAST_OLD.date || (r.date === EST_LAST_OLD.date && r.slot <= EST_LAST_OLD.slot);
+}
+
+function fixTruncatedQty(rows) {
+  const num = v => (v !== undefined && /^\d+$/.test(v)) ? parseInt(v) : null;
+  const proven = new Set();
+  rows.forEach(r => {
+    if (!isOldParserRow(r)) return;
+    const o = num(r.qty_open), m = num(r.mid_qty), c = num(r.qty_close);
+    if (o === null || o < 1 || o > 9) return;
+    const later = Math.max(m || 0, c || 0);
+    if (later < 500 || later <= o || later > o * 1000 + 999) return;
+    const est = Math.max(o * 1000, later);
+    r.est = 'calc';
+    r.qty_open_raw = r.qty_open;
+    r.sold_raw = r.sold;
+    r.qty_open = String(est);
+    if (m !== null && m >= 1 && m <= 9 && c !== null && c > m && c >= 500) {
+      r.mid_qty = String(Math.min(Math.max(m * 1000, c), est));
+      r.mid_est = true;
+    }
+    const sold = Math.max(est - (c || 0), 0);
+    r.sold = String(sold);
+    r.sell_rate = (sold / est * 100).toFixed(1);
+    proven.add(r.icode);
+  });
+  rows.forEach(r => {
+    if (r.est || !isOldParserRow(r) || !proven.has(r.icode)) return;
+    const o = num(r.qty_open);
+    if (o !== null && o >= 1 && o <= 9) r.est = 'doubt';
+  });
+}
+
+function fmtInt(v) { const n = parseInt(v); return isNaN(n) ? v : n.toLocaleString('zh-TW'); }
+
+function updateEstNotice(data) {
+  const el = document.getElementById('estNotice');
+  const calc = data.filter(r => r.est === 'calc').length;
+  const doubt = data.filter(r => r.est === 'doubt').length;
+  if (!calc && !doubt) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = `⚠️ 目前範圍內有 <b>${calc}</b> 筆開檔數量為推估值（舊版程式漏讀千位數，以千位整數還原，售出量為保守估計）`
+    + (doubt ? `，另有 <b>${doubt}</b> 筆數量存疑、無法推估` : '') + `。相關數字以紅字標示。`;
 }
 
 // ── 品類篩選 ──
@@ -385,6 +442,7 @@ function renderCurrentView() {
   if (panel) panel.style.display = 'block';
 
   const data = getFilteredData();
+  updateEstNotice(data);
   // 階段2、3會依 sub 呼叫對應的 render 函式，目前先維持 placeholder
   if (typeof RENDERERS !== 'undefined' && RENDERERS[sub]) {
     RENDERERS[sub](data);
@@ -403,9 +461,11 @@ function buildProductSummary(data) {
     const icode = r.icode;
     if (!icode) return;
     if (!map[icode]) {
-      map[icode] = { icode, name: r.name, brand: r.brand, cat1: r.cat1, cat2: r.cat2, listings: 0, totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0, lastDate: r.date };
+      map[icode] = { icode, name: r.name, brand: r.brand, cat1: r.cat1, cat2: r.cat2, listings: 0, totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0, lastDate: r.date, estCount: 0, doubtCount: 0 };
     }
     const m = map[icode];
+    if (r.est === 'calc') m.estCount += 1;
+    if (r.est === 'doubt') m.doubtCount += 1;
     const sold = parseInt(r.sold) || 0;
     const price = parseFloat(r.price) || 0;
     const rate = parseFloat(r.sell_rate) || 0;
@@ -455,7 +515,7 @@ function renderRank(data) {
       <td><div class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" onclick="gotoHistory('${m.icode}')" title="點擊查看完整履歷">${m.name}</div><div class="prod-brand">${m.brand}</div></td>
       <td style="font-size:12px;white-space:nowrap">${m.cat1 === UNCAT ? '<span style="color:var(--text-dim)">未分類</span>' : escHtml(m.cat1) + '<div class="prod-brand">' + escHtml(m.cat2) + '</div>'}</td>
       <td class="qty">${m.listings}</td>
-      <td class="qty" style="color:var(--blue);font-weight:700">${m.totalSold}</td>
+      <td class="qty" style="color:${(m.estCount || m.doubtCount) ? 'var(--red)' : 'var(--blue)'};font-weight:700" ${(m.estCount || m.doubtCount) ? `title="含 ${m.estCount} 筆推估、${m.doubtCount} 筆存疑的紀錄"` : ''}>${m.totalSold}${(m.estCount || m.doubtCount) ? ' ⚠' : ''}</td>
       <td class="qty">${m.avgRate.toFixed(1)}%</td>
       <td class="qty">${m.soldOutCount > 0 ? m.soldOutCount : '<span class="zero">0</span>'}</td>
       <td class="qty">$${Math.round(m.totalRevenue).toLocaleString('zh-TW')}</td>
@@ -562,16 +622,17 @@ function renderHistoryDetail(data) {
 
   const trs = rows.map(r => {
     const mid = (r.mid_qty !== undefined && r.mid_qty !== '') ? r.mid_qty : '-';
+    const isCalc = r.est === 'calc', isDoubt = r.est === 'doubt';
     return `<tr>
       <td class="qty">${r.date}</td>
       <td><span class="slot-tag ${slotTagClass(r.slot)}">${r.slot}</span></td>
       <td><span class="disc-badge">${r.discount}</span></td>
       <td class="qty">$${r.price}</td>
-      <td class="qty">${r.qty_open}</td>
-      <td class="qty">${mid}</td>
+      <td class="qty" ${isCalc ? `style="color:var(--red);font-weight:700" title="原始紀錄為 ${r.qty_open_raw}（漏讀千位數），以千位整數推估"` : isDoubt ? 'style="color:var(--red)" title="同商品在其他檔期為千位數，這筆可能也漏讀千位數，無法推估"' : ''}>${isCalc ? '約' + fmtInt(r.qty_open) : r.qty_open + (isDoubt ? ' ?' : '')}</td>
+      <td class="qty" ${r.mid_est ? 'style="color:var(--red)" title="推估值"' : ''}>${r.mid_est ? '約' + fmtInt(mid) : mid}</td>
       <td class="qty">${r.qty_close}</td>
-      <td class="qty" style="font-weight:700;color:${(parseInt(r.sold)||0)>0?'var(--blue)':'var(--text-dim)'}">${r.sold || '-'}</td>
-      <td class="qty">${r.sell_rate}%</td>
+      <td class="qty" style="font-weight:700;color:${(isCalc || isDoubt) ? 'var(--red)' : (parseInt(r.sold)||0)>0?'var(--blue)':'var(--text-dim)'}" ${isCalc ? `title="原始紀錄為 ${r.sold_raw || 0}，依推估開檔量重算（保守估計）"` : ''}>${isCalc ? '約' + fmtInt(r.sold) : (r.sold || '-') + (isDoubt ? ' ?' : '')}</td>
+      <td class="qty" ${(isCalc || isDoubt) ? 'style="color:var(--red)"' : ''}>${r.sell_rate}%${isDoubt ? ' ?' : ''}</td>
       <td>${r.sold_out === '是' ? '🔥' : ''}</td>
     </tr>`;
   }).join('');
