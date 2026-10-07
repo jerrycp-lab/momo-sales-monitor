@@ -141,6 +141,9 @@ tbody td{padding:9px 14px;vertical-align:middle;}
       <button class="quick-btn" onclick="selectQuickRange(30,this)">近30天</button>
       <button class="quick-btn" onclick="selectQuickRange('month',this)">本月</button>
     </div>
+    <span class="q-label">🏷️ 品類</span>
+    <select id="catL1Filter" class="q-date" onchange="onCatL1Change()"><option value="">全部大類</option></select>
+    <select id="catL2Filter" class="q-date" onchange="renderCurrentView()"><option value="">全部中類</option></select>
     <div class="q-right">
       <span class="last-update" id="csvLastUpdate"></span>
       <button class="reload-btn" onclick="loadData()">🔄 重新載入</button>
@@ -169,7 +172,8 @@ tbody td{padding:9px 14px;vertical-align:middle;}
 
     <!-- 維度排行：子頁籤 -->
     <div id="tabs-dimension" class="sub-tabs" style="display:none">
-      <div class="sub-tab active" data-sub="brand" onclick="selectSubTab('dimension','brand')">品牌排行榜</div>
+      <div class="sub-tab active" data-sub="category" onclick="selectSubTab('dimension','category')">品類排行榜</div>
+      <div class="sub-tab" data-sub="brand" onclick="selectSubTab('dimension','brand')">品牌排行榜</div>
       <div class="sub-tab" data-sub="slot" onclick="selectSubTab('dimension','slot')">檔期整體表現比較</div>
       <div class="sub-tab" data-sub="weekday" onclick="selectSubTab('dimension','weekday')">星期效應</div>
       <div class="sub-tab" data-sub="price" onclick="selectSubTab('dimension','price')">價格帶表現</div>
@@ -178,6 +182,7 @@ tbody td{padding:9px 14px;vertical-align:middle;}
     <!-- 內容區：各子頁籤對應一個 view -->
     <div id="view-rank" class="view-panel"></div>
     <div id="view-history" class="view-panel" style="display:none"></div>
+    <div id="view-category" class="view-panel" style="display:none"></div>
     <div id="view-brand" class="view-panel" style="display:none"></div>
     <div id="view-slot" class="view-panel" style="display:none"></div>
     <div id="view-weekday" class="view-panel" style="display:none"></div>
@@ -191,6 +196,8 @@ tbody td{padding:9px 14px;vertical-align:middle;}
 const GITHUB_USER = 'jerrycp-lab';
 const GITHUB_REPO = 'momo-sales-monitor';
 const CSV_URL = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main/snapshots/all_results.csv`;
+const CAT_URL = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main/snapshots/momo_categories.csv`;
+const UNCAT = '未分類';
 // ─────────────────────────────────────────
 
 // 價格帶分界（依實際資料分布統計後決定，見討論記錄）
@@ -204,7 +211,7 @@ const PRICE_BANDS = [
 
 let allData = [];
 let curMain = 'product';
-let curSub  = { product: 'rank', dimension: 'brand' };
+let curSub  = { product: 'rank', dimension: 'category' };
 
 window.addEventListener('load', loadData);
 
@@ -220,6 +227,19 @@ async function loadData() {
     allData = parseCSV(text);
 
     if (allData.length === 0) throw new Error('資料檔案是空的');
+
+    // 品類對照表（momo 大類/中類）。檔案還沒產生也不影響其他分析
+    let catMap = {};
+    try {
+      const cres = await fetch(CAT_URL + '?t=' + Date.now());
+      if (cres.ok) parseCSV(await cres.text(), 'icode').forEach(c => { if (c.cat_l1) catMap[c.icode] = c; });
+    } catch(e) {}
+    allData.forEach(r => {
+      const c = catMap[r.icode];
+      r.cat1 = c ? c.cat_l1 : UNCAT;
+      r.cat2 = c ? (c.cat_l2 || UNCAT) : UNCAT;
+    });
+    fillCatL1Options();
 
     const dates = [...new Set(allData.map(r => r.date))].sort();
     const earliestDate = dates[0];
@@ -246,7 +266,7 @@ async function loadData() {
   }
 }
 
-function parseCSV(text) {
+function parseCSV(text, keyField = 'date') {
   const lines = text.trim().split('\n');
   if (lines.length < 2) return [];
   const headers = lines[0].split(',').map(h => h.trim().replace(/^﻿/,''));
@@ -255,7 +275,36 @@ function parseCSV(text) {
     const obj = {};
     headers.forEach((h, i) => obj[h] = (vals[i] || '').trim());
     return obj;
-  }).filter(r => r.date);
+  }).filter(r => r[keyField]);
+}
+
+// ── 品類篩選 ──
+function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;'); }
+
+function fillCatL1Options() {
+  const sel = document.getElementById('catL1Filter');
+  const keep = sel.value;
+  const l1s = [...new Set(allData.map(r => r.cat1))].sort((a, b) => (a === UNCAT) - (b === UNCAT) || a.localeCompare(b, 'zh-TW'));
+  sel.innerHTML = '<option value="">全部大類</option>' + l1s.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
+  sel.value = l1s.includes(keep) ? keep : '';
+  fillCatL2Options();
+}
+
+function fillCatL2Options() {
+  const l1 = document.getElementById('catL1Filter').value;
+  const sel = document.getElementById('catL2Filter');
+  const l2s = l1 ? [...new Set(allData.filter(r => r.cat1 === l1).map(r => r.cat2))].sort((a, b) => a.localeCompare(b, 'zh-TW')) : [];
+  sel.innerHTML = '<option value="">全部中類</option>' + l2s.map(v => `<option value="${escHtml(v)}">${escHtml(v)}</option>`).join('');
+  sel.disabled = !l1;
+}
+
+function onCatL1Change() { fillCatL2Options(); renderCurrentView(); }
+
+function setCatFilter(l1) {
+  document.getElementById('catL1Filter').value = l1;
+  fillCatL2Options();
+  catLevel = 'cat2';
+  renderCurrentView();
 }
 
 // date字串格式為 YYYY/MM/DD，<input type=date> 需要 YYYY-MM-DD
@@ -303,9 +352,13 @@ function onManualDateChange() {
 function getFilteredData() {
   const start = toDataDate(document.getElementById('startDate').value);
   const end   = toDataDate(document.getElementById('endDate').value);
+  const l1 = document.getElementById('catL1Filter').value;
+  const l2 = document.getElementById('catL2Filter').value;
   return allData.filter(r => {
     if (start && r.date < start) return false;
     if (end && r.date > end) return false;
+    if (l1 && r.cat1 !== l1) return false;
+    if (l2 && r.cat2 !== l2) return false;
     return true;
   });
 }
@@ -350,7 +403,7 @@ function buildProductSummary(data) {
     const icode = r.icode;
     if (!icode) return;
     if (!map[icode]) {
-      map[icode] = { icode, name: r.name, brand: r.brand, listings: 0, totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0, lastDate: r.date };
+      map[icode] = { icode, name: r.name, brand: r.brand, cat1: r.cat1, cat2: r.cat2, listings: 0, totalSold: 0, totalRevenue: 0, rateSum: 0, soldOutCount: 0, lastDate: r.date };
     }
     const m = map[icode];
     const sold = parseInt(r.sold) || 0;
@@ -400,6 +453,7 @@ function renderRank(data) {
     <tr>
       <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
       <td><div class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" onclick="gotoHistory('${m.icode}')" title="點擊查看完整履歷">${m.name}</div><div class="prod-brand">${m.brand}</div></td>
+      <td style="font-size:12px;white-space:nowrap">${m.cat1 === UNCAT ? '<span style="color:var(--text-dim)">未分類</span>' : escHtml(m.cat1) + '<div class="prod-brand">' + escHtml(m.cat2) + '</div>'}</td>
       <td class="qty">${m.listings}</td>
       <td class="qty" style="color:var(--blue);font-weight:700">${m.totalSold}</td>
       <td class="qty">${m.avgRate.toFixed(1)}%</td>
@@ -422,8 +476,8 @@ function renderRank(data) {
         <div style="display:flex;gap:5px;flex-wrap:wrap">${sortBtns}</div>
       </div>
       <div style="overflow-x:auto"><table>
-        <thead><tr><th>#</th><th>商品名稱</th><th>上架次數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th><th>最後上架日</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:30px">此期間無資料</td></tr>'}</tbody>
+        <thead><tr><th>#</th><th>商品名稱</th><th>品類</th><th>上架次數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th><th>最後上架日</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="9" style="text-align:center;color:var(--text-dim);padding:30px">此期間無資料</td></tr>'}</tbody>
       </table></div>
       ${sorted.length > 100 ? `<div style="padding:10px 16px;font-size:11px;color:var(--text-dim)">僅顯示前100項（共${sorted.length}項，可縮小期間範圍聚焦查看）</div>` : ''}
     </div>
@@ -583,6 +637,64 @@ function miniBar(value, max, color) {
 }
 
 function fmtMoney(v) { return '$' + Math.round(v).toLocaleString('zh-TW'); }
+
+// ── 品類排行榜（momo 大類 / 中類）──
+let catLevel = 'cat1';
+let catSortKey = 'totalSold';
+
+function selectCatLevel(lv) { catLevel = lv; renderCategory(getFilteredData()); }
+function selectCatSort(key) { catSortKey = key; renderCategory(getFilteredData()); }
+
+function renderCategory(data) {
+  const isL1 = catLevel === 'cat1';
+  const summary = aggregateByKey(data, r => isL1 ? r.cat1 : (r.cat1 === UNCAT ? UNCAT : r.cat1 + ' ／ ' + r.cat2));
+  const sorted = [...summary].sort((a, b) => b[catSortKey] - a[catSortKey]);
+  const totalSold = summary.reduce((s, g) => s + g.totalSold, 0) || 1;
+
+  const allIcodes = new Set(data.map(r => r.icode));
+  const catIcodes = new Set(data.filter(r => r.cat1 !== UNCAT).map(r => r.icode));
+  const coverage = allIcodes.size ? (catIcodes.size / allIcodes.size * 100) : 0;
+
+  const levelBtns = [['cat1', '大類'], ['cat2', '中類']].map(([k, l]) =>
+    `<button class="quick-btn ${k === catLevel ? 'active' : ''}" onclick="selectCatLevel('${k}')">${l}</button>`).join('');
+  const sortBtns = BRAND_SORT_OPTIONS.map(o =>
+    `<button class="quick-btn ${o.key === catSortKey ? 'active' : ''}" onclick="selectCatSort('${o.key}')">${o.label}</button>`).join('');
+
+  const rows = sorted.slice(0, 100).map((s, i) => {
+    const clickable = isL1 && s.key !== UNCAT;
+    const nameCell = clickable
+      ? `<td class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" title="點擊只看這個大類的中類" onclick="setCatFilter(this.dataset.k)" data-k="${escHtml(s.key)}">${escHtml(s.key)}</td>`
+      : `<td class="prod-name" style="${s.key === UNCAT ? 'color:var(--text-dim)' : ''}">${escHtml(s.key)}</td>`;
+    return `<tr>
+      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
+      ${nameCell}
+      <td class="qty">${s.productCount}</td>
+      <td class="qty">${s.listings}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${s.totalSold}（${(s.totalSold / totalSold * 100).toFixed(0)}%）</td>
+      <td>${miniBar(s.avgRate, 100, 'var(--blue)')}</td>
+      <td class="qty">${s.soldOutCount}（${s.soldOutRate.toFixed(0)}%）</td>
+      <td class="qty">${fmtMoney(s.totalRevenue)}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('view-category').innerHTML = `
+    <div class="sum-row" style="background:var(--blue-lt);margin-bottom:16px;padding:12px 16px;border-radius:var(--radius)">
+      <span style="color:var(--blue);font-weight:700">🏷️ 已有品類的商品：${catIcodes.size} / ${allIcodes.size}（${coverage.toFixed(0)}%）</span>
+      <span style="color:var(--text-mid)">品類來自 momo 商品頁；舊商品會逐檔補齊，尚未補到的列為「未分類」</span>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><div class="card-dot" style="background:var(--blue)"></div>品類排行榜</div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap">${levelBtns}<span style="width:10px"></span>${sortBtns}</div>
+      </div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>#</th><th>${isL1 ? '大類' : '大類 ／ 中類'}</th><th>商品種數</th><th>上架次數</th><th>總銷售量（佔比）</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" style="text-align:center;color:var(--text-dim);padding:30px">此期間無資料</td></tr>'}</tbody>
+      </table></div>
+      ${sorted.length > 100 ? `<div style="padding:10px 16px;font-size:11px;color:var(--text-dim)">僅顯示前100項（共${sorted.length}項）</div>` : ''}
+    </div>
+  `;
+}
 
 // ── 品牌排行榜 ──
 let brandSortKey = 'totalSold';
@@ -760,7 +872,7 @@ function renderPrice(data) {
   `;
 }
 
-const RENDERERS = { rank: renderRank, history: renderHistory, brand: renderBrand, slot: renderSlot, weekday: renderWeekday, price: renderPrice };
+const RENDERERS = { category: renderCategory, rank: renderRank, history: renderHistory, brand: renderBrand, slot: renderSlot, weekday: renderWeekday, price: renderPrice };
 </script>
 </body>
 </html>
