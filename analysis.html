@@ -109,6 +109,10 @@ tbody td{padding:9px 14px;vertical-align:middle;}
 /* 搜尋框（商品履歷查詢用） */
 .search-box{padding:7px 12px;border-radius:7px;border:1px solid var(--border2);font-family:inherit;font-size:13px;color:var(--text);background:var(--bg);outline:none;min-width:220px;}
 .search-box:focus{border-color:var(--blue);}
+/* 公式說明（滑鼠移上或手機點一下標題即顯示） */
+[data-formula]{position:relative;cursor:help;text-decoration:underline dotted;text-underline-offset:3px;}
+[data-formula]:hover::after,[data-formula]:focus::after{content:attr(data-formula);position:absolute;left:0;top:calc(100% + 6px);z-index:50;width:max-content;max-width:280px;white-space:pre-line;background:#1e293b;color:#fff;font-size:11px;font-weight:400;line-height:1.6;letter-spacing:0;text-transform:none;padding:8px 10px;border-radius:7px;box-shadow:0 4px 14px rgba(0,0,0,.18);}
+th[data-formula]:last-child:hover::after,th[data-formula]:nth-last-child(2):hover::after{left:auto;right:0;}
 </style>
 </head>
 <body>
@@ -441,6 +445,41 @@ function selectSubTab(main, sub) {
   renderCurrentView();
 }
 
+// ── 公式說明：表頭與統計卡的名稱，滑鼠移上去顯示計算方式 ──
+const SOLD_F = '每檔售出 = 開檔數量 − 結束前數量（不小於 0）\n結束前已下架，視為賣完（結束前 = 0）';
+const FORMULAS = {
+  '上架次數': '期間內出現在限時搶購的檔次數\n（同一商品每上一檔算 1 次）',
+  '總上架次數': '期間內所有商品上架次數的加總',
+  '期間上架次數': '期間內這個商品上了幾檔',
+  '上架次數（佔比）': '分子：這個價格帶的上架次數\n分母：期間內全部上架次數\n佔比 = 分子 ÷ 分母 × 100%',
+  '商品種數': '期間內不重複的品號數量',
+  '總銷售量': '期間內每檔售出的加總\n' + SOLD_F,
+  '期間總銷售量': '這個商品期間內每檔售出的加總\n' + SOLD_F,
+  '總銷售量（佔比）': '分子：這一列的總銷售量\n分母：目前範圍內所有列的總銷售量加總\n佔比 = 分子 ÷ 分母 × 100%',
+  '平均售出率': '每檔售出率的平均（每檔權重相同）\n每檔售出率 = 售出 ÷ 開檔數量 × 100%\n平均 = 各檔售出率加總 ÷ 計入的檔次數\n數量存疑的紀錄不計入',
+  '售完次數': '結束前數量為 0（或已下架）的檔次數\n括號 = 售完次數 ÷ 上架次數 × 100%',
+  '期間營收': '期間內每檔「售出 × 活動價」的加總',
+  '期間總營收': '期間內所有商品每檔「售出 × 活動價」的加總',
+  '期間營業額': '這個商品期間內每檔「售出 × 活動價」的加總',
+  '最後上架日': '期間內最後一次出現在限時搶購的日期',
+  '品類': 'momo 商品頁的分類：大類／中類\n品牌旗艦館商品：大類 = 品牌旗艦，中類 = 品牌',
+  '活動價': '限時搶購的下殺價',
+  '折扣': '頁面標示的折數（活動價相對原價）',
+  '開檔': '開檔時的倒數組數\n開檔前一檔就先抓好，數量為 0 才在開檔後 3 分鐘補抓',
+  '中段': '時段中點的剩餘組數',
+  '結束前': '時段結束前 5 分鐘的剩餘組數',
+  '售出': '開檔 − 結束前（不小於 0）',
+  '售出率': '售出 ÷ 開檔 × 100%',
+  '營業額': '售出 × 活動價',
+};
+
+function decorateFormulas(root) {
+  (root || document).querySelectorAll('th, .sc-label').forEach(el => {
+    const f = FORMULAS[el.textContent.trim()];
+    if (f && !el.dataset.formula) { el.dataset.formula = f; el.tabIndex = 0; }
+  });
+}
+
 function renderCurrentView() {
   const sub = curSub[curMain];
   document.querySelectorAll('.view-panel').forEach(p => p.style.display = 'none');
@@ -486,12 +525,12 @@ function buildProductSummary(data) {
 }
 
 // ── 商品排行榜 ──
-let rankSortKey = 'totalSold';
+let rankSortKey = 'totalRevenue';
 const RANK_SORT_OPTIONS = [
+  { key: 'totalRevenue', label: '依期間營收' },
   { key: 'totalSold',    label: '依總銷售量' },
   { key: 'listings',     label: '依上架次數' },
   { key: 'avgRate',      label: '依平均售出率' },
-  { key: 'totalRevenue', label: '依期間營收' },
 ];
 
 function selectRankSort(key) {
@@ -626,6 +665,9 @@ function renderHistoryDetail(data) {
   const rateRows = rows.filter(r => r.est !== 'doubt');   // 存疑紀錄不計入平均售出率
   const avgRate = (rateRows.length ? rateRows.reduce((s, r) => s + (parseFloat(r.sell_rate) || 0), 0) / rateRows.length : 0).toFixed(1);
   const soldOutCount = rows.filter(r => r.sold_out === '是').length;
+  const rowRevenue = r => (parseInt(r.sold) || 0) * (parseFloat(r.price) || 0);
+  const totalRevenue = rows.reduce((s, r) => s + rowRevenue(r), 0);
+  const hasEst = rows.some(r => r.est);
 
   const trs = rows.map(r => {
     const mid = (r.mid_qty !== undefined && r.mid_qty !== '') ? r.mid_qty : '-';
@@ -640,16 +682,18 @@ function renderHistoryDetail(data) {
       <td class="qty" ${isDoubt ? 'style="color:var(--red)"' : ''}>${r.qty_close}</td>
       <td class="qty" style="font-weight:700;color:${(isCalc || isDoubt) ? 'var(--red)' : (parseInt(r.sold)||0)>0?'var(--blue)':'var(--text-dim)'}" ${isCalc ? `title="原始紀錄為 ${r.sold_raw || 0}，依推估開檔量重算（保守估計）"` : ''}>${isCalc ? '約' + fmtInt(r.sold) : (r.sold || '-')}</td>
       <td class="qty" ${(isCalc || isDoubt) ? 'style="color:var(--red)"' : ''} ${isDoubt ? 'title="不計入平均售出率"' : ''}>${isDoubt ? '不計' : r.sell_rate + '%'}</td>
+      <td class="qty" ${(isCalc || isDoubt) ? 'style="color:var(--red)"' : ''}>${isCalc ? '約' : ''}${fmtMoney(rowRevenue(r))}</td>
       <td>${r.sold_out === '是' ? '🔥' : ''}</td>
     </tr>`;
   }).join('');
 
   detailEl.innerHTML = `
-    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-top:16px">
+    <div class="stat-grid" style="grid-template-columns:repeat(5,1fr);margin-top:16px">
       <div class="stat-card"><div class="sc-row"><div class="sc-label">期間上架次數</div><div class="sc-ico">📋</div></div><div class="sc-val" style="color:var(--blue)">${rows.length}</div></div>
       <div class="stat-card"><div class="sc-row"><div class="sc-label">期間總銷售量</div><div class="sc-ico">📦</div></div><div class="sc-val" style="color:var(--green)">${totalSold}</div></div>
       <div class="stat-card"><div class="sc-row"><div class="sc-label">平均售出率</div><div class="sc-ico">📊</div></div><div class="sc-val" style="color:var(--text-mid)">${avgRate}%</div></div>
       <div class="stat-card"><div class="sc-row"><div class="sc-label">售完次數</div><div class="sc-ico">🔥</div></div><div class="sc-val" style="color:var(--red)">${soldOutCount}</div></div>
+      <div class="stat-card"><div class="sc-row"><div class="sc-label">期間營業額</div><div class="sc-ico">💰</div></div><div class="sc-val" style="color:${hasEst ? 'var(--red)' : 'var(--momo)'}">${fmtMoney(totalRevenue)}</div></div>
     </div>
     <div class="card">
       <div class="card-header">
@@ -657,7 +701,7 @@ function renderHistoryDetail(data) {
         <div class="sort-note">依日期新到舊排序</div>
       </div>
       <div style="overflow-x:auto"><table>
-        <thead><tr><th>日期</th><th>時段</th><th>折扣</th><th>活動價</th><th>開檔</th><th>中段</th><th>結束前</th><th>售出</th><th>售出率</th><th>狀態</th></tr></thead>
+        <thead><tr><th>日期</th><th>時段</th><th>折扣</th><th>活動價</th><th>開檔</th><th>中段</th><th>結束前</th><th>售出</th><th>售出率</th><th>營業額</th><th>狀態</th></tr></thead>
         <tbody>${trs}</tbody>
       </table></div>
     </div>
@@ -939,6 +983,10 @@ function renderPrice(data) {
     </div>
   `;
 }
+
+// 任何畫面重繪後（含切換排序）自動補上公式說明
+new MutationObserver(() => decorateFormulas(document.getElementById('mainContent')))
+  .observe(document.getElementById('mainContent'), { childList: true, subtree: true });
 
 const RENDERERS = { category: renderCategory, rank: renderRank, history: renderHistory, brand: renderBrand, slot: renderSlot, weekday: renderWeekday, price: renderPrice };
 </script>
