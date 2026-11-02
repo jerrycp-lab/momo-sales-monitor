@@ -1,7 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-momo 限時搶購 - 商品資料抓取程式 v10
+momo 限時搶購 - 商品資料抓取程式 v11
 
+v11 新增內容（2026/11）：
+  - 修正「提前抓」數字口徑不同的問題：2026/11/01 22:00 魚油，提前抓到 4476
+    （與前一檔結束前相同），開檔後 3 分鐘實際只剩 290，結果售出被算成 4198。
+    現在開檔後 3 分鐘補抓時，若數量比提前抓「少一半以上」（PRE_DROP_RATIO），
+    改用開檔後的數字，並把提前抓的數字存在新欄位 qty_pre 供檢視；
+    數量差不多就維持提前抓（保留「第一分鐘就被秒殺也抓得到原量」的好處）；
+    開檔後數量為 0 的仍沿用提前抓（代表開檔瞬間賣完）。
+
+v10 新增內容（2026/10）：
 v10 新增內容（2026/10）：
   - 開檔資料改為「提前抓」：每次 open（以及 close）執行時，順便把
     「下一檔」的商品與數量先存成下一檔的 _open.csv。
@@ -60,7 +69,11 @@ RETRY_WAIT_MS   = 5000    # 每次重試前等待 5 秒
 # 哪些檢查點要順便提前抓「下一檔」的開檔資料
 PRECAPTURE_AT = ("open", "close")
 
-FIELDNAMES = ["icode","brand","name","discount","old_price","price","qty","scraped_at","source"]
+FIELDNAMES = ["icode","brand","name","discount","old_price","price","qty","scraped_at","source","qty_pre"]
+
+# 開檔後 3 分鐘的數量比提前抓少於這個比例，就改用開檔後的數字
+PRE_DROP_RATIO = 0.5
+PRE_DROP_MIN_QTY = 100   # 提前抓數量太小（<100）時差異不具意義，不處理
 
 SLOTS = [
     (0,  7,  "0000"),
@@ -121,17 +134,36 @@ def qty_missing(value) -> bool:
     return text == "" or text == "0"
 
 
+def to_int(value):
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+
+
 def merge_open(pre_rows: list, fresh: list):
-    """提前抓的資料為主，只補數量為 0/空白的商品，以及新出現的商品"""
+    """提前抓的資料為主。
+    - 提前抓數量是 0/空白 → 用開檔後的數字補上
+    - 開檔後數量比提前抓少一半以上（且提前抓 >= PRE_DROP_MIN_QTY）→ 改用開檔後數字，
+      提前抓的數字存到 qty_pre（可能是口徑不同，也可能是真的開搶秒殺，由前端標示）
+    - 其餘維持提前抓；開檔後數量為 0（開檔瞬間賣完）也維持提前抓"""
     fresh_map = {p["icode"]: p for p in fresh}
-    merged, filled, added = [], 0, 0
+    merged, filled, switched, added = [], 0, 0, 0
     seen = set()
     for row in pre_rows:
         icode = row["icode"]
         seen.add(icode)
-        if qty_missing(row.get("qty")) and icode in fresh_map and not qty_missing(fresh_map[icode].get("qty")):
-            merged.append(fresh_map[icode])
+        f = fresh_map.get(icode)
+        pre_q, new_q = to_int(row.get("qty")), (to_int(f.get("qty")) if f else None)
+        if qty_missing(row.get("qty")) and f is not None and not qty_missing(f.get("qty")):
+            merged.append(f)
             filled += 1
+        elif (f is not None and pre_q is not None and new_q is not None
+              and new_q > 0 and pre_q >= PRE_DROP_MIN_QTY and new_q < pre_q * PRE_DROP_RATIO):
+            f = dict(f)
+            f["qty_pre"] = pre_q
+            merged.append(f)
+            switched += 1
         else:
             row.setdefault("source", "pre")
             merged.append(row)
@@ -139,7 +171,7 @@ def merge_open(pre_rows: list, fresh: list):
         if p["icode"] not in seen:
             merged.append(p)
             added += 1
-    return merged, filled, added
+    return merged, filled, switched, added
 
 
 def log_failure(date_str: str, slot_code: str, checkpoint: str, reason: str):
@@ -298,8 +330,9 @@ def run(checkpoint: str):
         # 開檔：若已有提前抓的資料，只補數量為 0/空白與新出現的商品
         pre_rows = load_snapshot_rows(snapshot_path(date_str, cur_slot, "open"))
         if pre_rows:
-            merged, filled, added = merge_open(pre_rows, products)
-            print(f"  📦 已有提前抓的開檔資料 {len(pre_rows)} 個商品 → 補抓數量 {filled} 個、新增商品 {added} 個")
+            merged, filled, switched, added = merge_open(pre_rows, products)
+            print(f"  📦 已有提前抓的開檔資料 {len(pre_rows)} 個商品 → 補抓數量 {filled} 個、"
+                  f"數量驟降改用開檔後數字 {switched} 個、新增商品 {added} 個")
             save_csv(merged, date_str, cur_slot, checkpoint, f"  ← {time_text}")
         else:
             print("  📦 沒有提前抓的開檔資料，改用這次抓到的整檔資料")
