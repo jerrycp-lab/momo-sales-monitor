@@ -76,6 +76,8 @@ tbody tr:hover{background:#f8fafc;}
 tbody td{padding:9px 14px;vertical-align:middle;}
 .prod-name{font-weight:600;font-size:12px;}
 .prod-brand{font-size:11px;color:var(--text-dim);}
+.icode-link{font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dim);text-decoration:none;white-space:nowrap;}
+.icode-link:hover{color:var(--blue);text-decoration:underline;}
 .qty{font-family:'DM Mono',monospace;font-size:12px;}
 .zero{color:var(--text-dim);}
 .slot-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700;white-space:nowrap;}
@@ -237,7 +239,7 @@ async function loadData() {
 
     if (allData.length === 0) throw new Error('資料檔案是空的');
 
-    fixTruncatedQty(allData);
+    applyDataFlags(allData);
     flagRows(allData);
 
     // 品類對照表（momo 大類/中類）。檔案還沒產生也不影響其他分析
@@ -364,11 +366,31 @@ function flagRows(rows) {
     }
   });
 }
+// ── momo 商品頁連結：用品號（icode）組網址，不需另外儲存 ──
+function momoUrl(icode) { return 'https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code=' + String(icode).replace(/\D/g, ''); }
+function icodeLink(icode) {
+  const id = String(icode).replace(/\D/g, '');
+  return `<a class="icode-link" href="${momoUrl(id)}" target="_blank" rel="noopener noreferrer" title="在 momo 開啟商品頁（商品下架後可能打不開）" onclick="event.stopPropagation()">品號 ${id} 🔗</a>`;
+}
 function restockTitle(r) { return `結束前庫存 ${r.qty_close} > 中段 ${r.mid_qty}：可能有加量操作，售出量預估可能偏低`; }
 function openFlagTitle(r) {
   if (r.openSuspect) return `疑似異常：開檔為提前抓取的 ${r.qty_open}（與前一檔結束前相同），但中段已降到 ${r.mid_qty}，售出量可信度低`;
   if (r.openSwitched) return `提前抓為 ${r.qty_pre}，開檔後 3 分鐘庫存驟降，已改用開檔後數字 ${r.qty_open}`;
   return '';
+}
+
+// ── 歷史資料修正：讀取 all_results.csv 的 data_flag / raw_values ──
+// data_flag = calc（開檔已推估還原）／doubt（存疑、數量以 0 計）；raw_values = 開檔|中段|結束前|售出|售出率（原始值）
+// 若 CSV 還沒有這兩個欄位（尚未執行 repair_history.py），退回用前端推估（fixTruncatedQty）
+function applyDataFlags(rows) {
+  if (!rows.length || !('data_flag' in rows[0])) { if (typeof fixTruncatedQty === 'function') fixTruncatedQty(rows); return; }
+  rows.forEach(r => {
+    if (r.data_flag !== 'calc' && r.data_flag !== 'doubt') return;
+    const [ro, rm, rc, rs] = (r.raw_values || '').split('|');
+    r.est = r.data_flag;
+    if (r.data_flag === 'calc') { r.qty_open_raw = ro; r.sold_raw = rs; if ((rm || '') !== r.mid_qty) r.mid_est = true; }
+    else { r.raw_text = `${ro} → ${rm ? rm : '-'} → ${rc}`; }
+  });
 }
 
 function fmtInt(v) { const n = parseInt(v); return isNaN(n) ? v : n.toLocaleString('zh-TW'); }
@@ -614,7 +636,7 @@ function renderRank(data) {
   const rows = sorted.slice(0, 100).map((m, i) => `
     <tr>
       <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
-      <td><div class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" onclick="gotoHistory('${m.icode}')" title="點擊查看完整履歷">${m.name}</div><div class="prod-brand">${m.brand}</div></td>
+      <td><div class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" onclick="gotoHistory('${m.icode}')" title="點擊查看完整履歷">${m.name}</div><div class="prod-brand">${m.brand} ・ ${icodeLink(m.icode)}</div></td>
       <td style="font-size:12px;white-space:nowrap">${m.cat1 === UNCAT ? '<span style="color:var(--text-dim)">未分類</span>' : escHtml(m.cat1) + '<div class="prod-brand">' + escHtml(m.cat2) + '</div>'}</td>
       <td class="qty">${m.listings}</td>
       <td class="qty" style="color:${(m.estCount || m.doubtCount) ? 'var(--red)' : 'var(--blue)'};font-weight:700" ${(m.estCount || m.doubtCount) ? `title="含 ${m.estCount} 筆推估、${m.doubtCount} 筆存疑的紀錄"` : ''}>${m.totalSold}${(m.estCount || m.doubtCount) ? ' ⚠' : ''}</td>
@@ -695,7 +717,7 @@ function updateHistorySearchResults(data) {
     <div style="padding:8px 10px;border-radius:7px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;background:var(--bg)"
          onmouseover="this.style.background='var(--blue-lt)'" onmouseout="this.style.background='var(--bg)'"
          onclick="selectHistoryProduct('${m.icode}')">
-      <span><span class="prod-name">${m.name}</span> <span class="prod-brand">（${m.brand}）</span></span>
+      <span><span class="prod-name">${m.name}</span> <span class="prod-brand">（${m.brand}）・品號 ${m.icode}</span></span>
       <span style="color:var(--text-dim);font-size:11px;white-space:nowrap">期間內上架${m.listings}次・售出${m.totalSold}件</span>
     </div>
   `).join('');
@@ -755,7 +777,7 @@ function renderHistoryDetail(data) {
     </div>
     <div class="card">
       <div class="card-header">
-        <div class="card-title"><div class="card-dot" style="background:var(--momo)"></div>${first.name}（${first.brand}）上架履歷</div>
+        <div class="card-title"><div class="card-dot" style="background:var(--momo)"></div>${first.name}（${first.brand}）上架履歷 ${icodeLink(first.icode)}</div>
         <div class="sort-note">依日期新到舊排序</div>
       </div>
       <div style="overflow-x:auto"><table>
