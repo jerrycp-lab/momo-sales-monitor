@@ -89,6 +89,8 @@ tbody td{padding:9px 14px;vertical-align:middle;}
 .tag-2200{background:#fce7f3;color:var(--momo);}
 .prod-name{font-weight:600;font-size:12px;}
 .prod-brand{font-size:11px;color:var(--text-dim);}
+.icode-link{font-family:'DM Mono',monospace;font-size:10px;color:var(--text-dim);text-decoration:none;white-space:nowrap;}
+.icode-link:hover{color:var(--blue);text-decoration:underline;}
 .disc-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;background:var(--orange-lt);color:var(--orange);}
 .rate-wrap{display:flex;align-items:center;gap:7px;}
 .rate-track{width:70px;height:5px;background:var(--border);border-radius:3px;overflow:hidden;}
@@ -171,6 +173,7 @@ tbody td{padding:9px 14px;vertical-align:middle;}
     </div>
   </div>
 
+  <div id="alertBanner" style="display:none;background:#fef2f2;color:#991b1b;padding:10px 16px;border-radius:var(--radius);margin-bottom:12px;font-size:12px;line-height:1.7"></div>
   <div id="flagNotice" style="display:none;background:#fff7ed;color:#9a3412;padding:10px 16px;border-radius:var(--radius);margin-bottom:16px;font-size:12px"></div>
   <div id="errorMsg" class="error-msg" style="display:none"></div>
   <div id="loadingArea" class="loading">
@@ -244,6 +247,28 @@ let curSlot = 'all';
 // 頁面載入時自動讀取資料
 window.addEventListener('load', loadData);
 
+function dates_of(rows) { return [...new Set(rows.map(r => r.date))].sort(); }
+
+// 讀 data_alerts.csv（check_anomalies.py 產生），只顯示最新資料日往前 3 天的「高／中」告警；檔案不存在就靜默略過
+async function loadAlerts(dates) {
+  const box = document.getElementById('alertBanner');
+  box.style.display = 'none';
+  try {
+    const res = await fetch(CSV_URL.replace('all_results.csv', 'data_alerts.csv') + '?t=' + Date.now());
+    if (!res.ok) return;
+    const rows = parseCSV(await res.text());
+    const recent = new Set(dates.slice(-3));
+    const list = rows.filter(a => recent.has(a.date) && a.severity !== '低');
+    if (!list.length) return;
+    const esc = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    list.sort((x, y) => (y.date + y.slot).localeCompare(x.date + x.slot));
+    box.innerHTML = `🚨 <b>近 3 天數據告警 ${list.length} 則</b>（高 ${list.filter(a => a.severity === '高').length} / 中 ${list.filter(a => a.severity === '中').length}）<br>` +
+      list.slice(0, 8).map(a => `<span style="opacity:.75">${esc(a.date)} ${esc(a.slot)}</span> [${esc(a.severity)}] ${esc(a.type)}${a.name ? '：' + esc(a.name) : ''} — ${esc(a.detail)}`).join('<br>') +
+      (list.length > 8 ? `<br>…另有 ${list.length - 8} 則，詳見 snapshots/data_alerts.csv` : '');
+    box.style.display = 'block';
+  } catch (e) { /* 告警是附加功能，失敗不影響主頁 */ }
+}
+
 async function loadData() {
   document.getElementById('loadingArea').style.display = 'block';
   document.getElementById('mainContent').style.display = 'none';
@@ -257,7 +282,9 @@ async function loadData() {
     allData = parseCSV(text);
 
     if (allData.length === 0) throw new Error('資料檔案是空的');
+    applyDataFlags(allData);
     flagRows(allData);
+    loadAlerts(dates_of(allData));
 
     // 設定日期預設值為最新日期
     const dates = [...new Set(allData.map(r => r.date))].sort();
@@ -308,6 +335,29 @@ function flagRows(rows) {
       if (prev && num(prev.qty_close) === o) r.openSuspect = true;
     }
   });
+}
+// ── momo 商品頁連結：用品號（icode）組網址，不需另外儲存 ──
+function momoUrl(icode) { return 'https://www.momoshop.com.tw/goods/GoodsDetail.jsp?i_code=' + String(icode).replace(/\D/g, ''); }
+function icodeLink(icode) {
+  const id = String(icode).replace(/\D/g, '');
+  return `<a class="icode-link" href="${momoUrl(id)}" target="_blank" rel="noopener noreferrer" title="在 momo 開啟商品頁（商品下架後可能打不開）" onclick="event.stopPropagation()">品號 ${id} 🔗</a>`;
+}
+// ── 歷史資料修正：讀取 all_results.csv 的 data_flag / raw_values ──
+// data_flag = calc（開檔已推估還原）／doubt（存疑、數量以 0 計）；raw_values = 開檔|中段|結束前|售出|售出率（原始值）
+// 若 CSV 還沒有這兩個欄位（尚未執行 repair_history.py），退回用前端推估（fixTruncatedQty）
+function applyDataFlags(rows) {
+  if (!rows.length || !('data_flag' in rows[0])) { if (typeof fixTruncatedQty === 'function') fixTruncatedQty(rows); return; }
+  rows.forEach(r => {
+    if (r.data_flag !== 'calc' && r.data_flag !== 'doubt') return;
+    const [ro, rm, rc, rs] = (r.raw_values || '').split('|');
+    r.est = r.data_flag;
+    if (r.data_flag === 'calc') { r.qty_open_raw = ro; r.sold_raw = rs; if ((rm || '') !== r.mid_qty) r.mid_est = true; }
+    else { r.raw_text = `${ro} → ${rm ? rm : '-'} → ${rc}`; }
+  });
+}
+function fmtInt(v) { const n = parseInt(v); return isNaN(n) ? v : n.toLocaleString('zh-TW'); }
+function estTitle(r) {
+  return r.est === 'calc' ? `原始紀錄為 ${r.qty_open_raw}（舊版程式漏讀千位數），以千位整數推估，售出量為保守估計` : `數量存疑（漏讀千位數、無法推估），以 0 計、不計入平均售出率。原始紀錄：${r.raw_text}`;
 }
 function restockTitle(r) { return `結束前庫存 ${r.qty_close} > 中段 ${r.mid_qty}：可能有加量操作，售出量預估可能偏低`; }
 function openFlagTitle(r) {
@@ -380,12 +430,13 @@ function showHistoryModal(icode) {
   });
   if (rows.length === 0) return;
 
-  document.getElementById('modalTitle').textContent = `${rows[0].name}（${rows[0].brand}）`;
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  document.getElementById('modalTitle').innerHTML = `${esc(rows[0].name)}（${esc(rows[0].brand)}） ${icodeLink(rows[0].icode)}`;
   const trs = rows.map(r => {
     const mid = (r.mid_qty !== undefined && r.mid_qty !== '') ? r.mid_qty : '-';
     return `<tr>
       <td>${r.date}</td><td>${r.slot}</td><td>${r.discount}</td><td>$${r.price}</td>
-      <td ${(r.openSuspect || r.openSwitched) ? `style="color:var(--orange);font-weight:700" title="${openFlagTitle(r)}"` : ''}>${r.qty_open}${(r.openSuspect || r.openSwitched) ? ' ⚠' : ''}</td><td>${mid}</td>
+      <td ${r.est ? `style="color:var(--red);font-weight:700" title="${estTitle(r)}"` : (r.openSuspect || r.openSwitched) ? `style="color:var(--orange);font-weight:700" title="${openFlagTitle(r)}"` : ''}>${r.est === 'calc' ? '約' + fmtInt(r.qty_open) : r.qty_open}${(!r.est && (r.openSuspect || r.openSwitched)) ? ' ⚠' : ''}</td><td ${(r.est === 'doubt' || r.mid_est) ? 'style="color:var(--red)"' : ''}>${r.mid_est ? '約' + fmtInt(mid) : mid}</td>
       <td ${r.restock ? `style="color:var(--purple);font-weight:700" title="${restockTitle(r)}"` : ''}>${r.qty_close}${r.restock ? ' ▲' : ''}</td>
       <td>${r.sold||'-'}</td><td>${r.sell_rate}%</td>
     </tr>`;
@@ -435,7 +486,8 @@ function renderStats(data) {
   const soldOut  = data.filter(r => r.sold_out === '是').length;
   const maxSold  = data.reduce((m, r) => Math.max(m, parseInt(r.sold)||0), 0);
   const maxItem  = data.find(r => (parseInt(r.sold)||0) === maxSold);
-  const avgRate  = data.length ? (data.reduce((s,r)=>s+(parseFloat(r.sell_rate)||0),0)/data.length).toFixed(1) : 0;
+  const rateRows = data.filter(r => r.est !== 'doubt');   // 存疑列不計入平均售出率
+  const avgRate  = rateRows.length ? (rateRows.reduce((s,r)=>s+(parseFloat(r.sell_rate)||0),0)/rateRows.length).toFixed(1) : 0;
   const revenue  = data.reduce((s,r) => s + ((parseFloat(r.price)||0) * (parseInt(r.sold)||0)), 0);
   const revenueFmt = '$' + Math.round(revenue).toLocaleString('zh-TW');
 
@@ -488,14 +540,14 @@ const isDup = dupSet.has(r.icode);
     const nameTitle = isDup ? 'title="點擊查看近3日上架紀錄"' : '';
     return `<tr>
       <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i+1}</td>
-      <td><div class="prod-name" ${nameStyle} ${nameOnClick} ${nameTitle}>${r.name}${isDup?' 🔁':''}</div><div class="prod-brand">${r.brand}</div></td>
+      <td><div class="prod-name" ${nameStyle} ${nameOnClick} ${nameTitle}>${r.name}${isDup?' 🔁':''}</div><div class="prod-brand">${r.brand} ・ ${icodeLink(r.icode)}</div></td>
       <td><span class="slot-tag ${slotTagClass(r.slot)}">${r.slot}</span></td>
       <td><span class="disc-badge">${r.discount}</span></td>
       <td style="font-family:'DM Mono',monospace">$${r.price}</td>
-      <td class="qty" ${(r.openSuspect || r.openSwitched) ? `style="color:var(--orange);font-weight:700" title="${openFlagTitle(r)}"` : ''}>${r.qty_open}${(r.openSuspect || r.openSwitched) ? ' ⚠' : ''}</td>
-      <td class="qty">${midDisplay}</td>
-      <td class="qty" ${r.restock ? `style="color:var(--purple);font-weight:700" title="${restockTitle(r)}"` : ''}>${r.qty_close}${r.restock ? ' ▲' : ''}</td>
-      <td><span class="sold-num ${sold===0?'zero':''}" style="color:${sold>0?'var(--blue)':'var(--text-dim)'}">${sold||'-'}</span></td>
+      <td class="qty" ${r.est ? `style="color:var(--red);font-weight:700" title="${estTitle(r)}"` : (r.openSuspect || r.openSwitched) ? `style="color:var(--orange);font-weight:700" title="${openFlagTitle(r)}"` : ''}>${r.est === 'calc' ? '約' + fmtInt(r.qty_open) : r.qty_open}${(!r.est && (r.openSuspect || r.openSwitched)) ? ' ⚠' : ''}</td>
+      <td class="qty" ${(r.est === 'doubt' || r.mid_est) ? 'style="color:var(--red)"' : ''}>${r.mid_est ? '約' + fmtInt(midDisplay) : midDisplay}</td>
+      <td class="qty" ${r.est === 'doubt' ? 'style="color:var(--red)"' : r.restock ? `style="color:var(--purple);font-weight:700" title="${restockTitle(r)}"` : ''}>${r.qty_close}${r.restock ? ' ▲' : ''}</td>
+      <td><span class="sold-num ${sold===0?'zero':''}" style="color:${r.est?'var(--red)':sold>0?'var(--blue)':'var(--text-dim)'}">${r.est === 'calc' ? '約' + fmtInt(sold) : (sold||'-')}</span></td>
       <td><div class="rate-wrap"><div class="rate-track"><div class="rate-fill" style="width:${barW}%;background:${barColor}"></div></div><div style="font-size:11px;font-family:'DM Mono',monospace;min-width:38px;color:${barColor}">${rate}%</div></div></td>
       <td>${isSoldOut?'<span class="sold-out-tag">🔥 售完</span>':''}${r.restock?'<span title="'+restockTitle(r)+'" style="color:var(--purple);font-size:11px;font-weight:700"> 📈加量</span>':''}${r.openSuspect?'<span title="'+openFlagTitle(r)+'" style="color:var(--orange);font-size:11px;font-weight:700"> ⚠存疑</span>':''}</td>
     </tr>`;
@@ -538,7 +590,8 @@ function renderSummary(data) {
   const zeroSale= data.filter(r => (parseInt(r.sold)||0)===0);
   const topItem = [...data].sort((a,b)=>(parseInt(b.sold)||0)-(parseInt(a.sold)||0))[0];
   const topRate = [...data].sort((a,b)=>(parseFloat(b.sell_rate)||0)-(parseFloat(a.sell_rate)||0))[0];
-  const avgRate = total ? (data.reduce((s,r)=>s+(parseFloat(r.sell_rate)||0),0)/total).toFixed(1) : 0;
+  const rateRows = data.filter(r => r.est !== 'doubt');
+  const avgRate = rateRows.length ? (rateRows.reduce((s,r)=>s+(parseFloat(r.sell_rate)||0),0)/rateRows.length).toFixed(1) : 0;
 
   document.getElementById('summary').innerHTML = `
     <div class="sum-title">篩選範圍摘要</div>
