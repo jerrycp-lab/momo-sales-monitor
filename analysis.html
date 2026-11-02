@@ -148,6 +148,9 @@ th[data-formula]:last-child:hover::after,th[data-formula]:nth-last-child(2):hove
     <span class="q-label">🏷️ 品類</span>
     <select id="catL1Filter" class="q-date" onchange="onCatL1Change()"><option value="">全部大類</option></select>
     <select id="catL2Filter" class="q-date" onchange="renderCurrentView()"><option value="">全部中類</option></select>
+    <label class="q-label" style="font-weight:500;cursor:pointer" title="開檔為提前抓取、數字與前一檔結束前相同，但中段驟降的舊資料（例：魚油 4476 → 290），可信度低">
+      <input type="checkbox" id="excludeSuspect" checked onchange="renderCurrentView()"> 排除疑似異常開檔列
+    </label>
     <div class="q-right">
       <span class="last-update" id="csvLastUpdate"></span>
       <button class="reload-btn" onclick="loadData()">🔄 重新載入</button>
@@ -155,6 +158,7 @@ th[data-formula]:last-child:hover::after,th[data-formula]:nth-last-child(2):hove
   </div>
 
   <div id="estNotice" style="display:none;background:var(--red-lt);color:var(--red);padding:10px 16px;border-radius:var(--radius);margin-bottom:16px;font-size:12px"></div>
+  <div id="flagNotice" style="display:none;background:#fff7ed;color:#9a3412;padding:10px 16px;border-radius:var(--radius);margin-bottom:16px;font-size:12px"></div>
   <div id="errorMsg" class="error-msg" style="display:none"></div>
   <div id="loadingArea" class="loading">
     <div class="loading-spin">⏳</div>
@@ -234,6 +238,7 @@ async function loadData() {
     if (allData.length === 0) throw new Error('資料檔案是空的');
 
     fixTruncatedQty(allData);
+    flagRows(allData);
 
     // 品類對照表（momo 大類/中類）。檔案還沒產生也不影響其他分析
     let catMap = {};
@@ -333,7 +338,56 @@ function fixTruncatedQty(rows) {
   });
 }
 
+// ── 資料旗標：加量／疑似異常開檔 ──
+// restock      ：結束前庫存 > 中段庫存 → 可能有加量操作，售出（= 開檔 − 結束前）預估偏低
+// openSuspect  ：2026/11/01 前的舊資料，開檔是「提前抓」、數字與同商品前一檔的結束前完全相同（共用庫存口徑），
+//                但中段已掉到開檔的 20% 以下（例：魚油 4476 → 290）。可信度低，預設不計入統計（可取消勾選）
+// openSwitched ：新版抓取程式發現開檔後 3 分鐘庫存驟降，已改用開檔後數字，qty_pre 保留提前抓的數字
+const OPEN_FIX_FROM = '2026/11/03';   // 此日起使用新版抓取程式（momo_scraper v11），之後不再用 openSuspect 規則
+const SLOT_SEQ = ['00:00','07:00','11:00','14:00','18:00','22:00'];
+function flagRows(rows) {
+  const num = v => (v !== undefined && v !== '' && /^\d+$/.test(v)) ? parseInt(v) : null;
+  const byKey = {};
+  rows.forEach(r => { (byKey[r.date + '|' + r.icode] = byKey[r.date + '|' + r.icode] || {})[r.slot] = r; });
+  rows.forEach(r => {
+    r.restock = false; r.openSuspect = false; r.openSwitched = false;
+    if (r.est) return;   // 千位數推估／存疑列已另外以紅字處理
+    const o = num(r.qty_open), m = num(r.mid_qty), c = num(r.qty_close), p = num(r.qty_pre);
+    // 2026/10/07 11:00 檔（含）以前的舊版程式會把千位數漏讀成個位數（中段 1～9），這種不當作加量
+    const oldParser = r.date < '2026/10/07' || (r.date === '2026/10/07' && r.slot <= '11:00');
+    if (m !== null && c !== null && c > m && !(oldParser && m <= 9)) r.restock = true;
+    if (p !== null && o !== null && p > o) r.openSwitched = true;
+    if (r.open_source === 'pre' && r.date < OPEN_FIX_FROM && o !== null && o >= 200 && m !== null && m <= o * 0.2) {
+      const i = SLOT_SEQ.indexOf(r.slot);
+      const prev = i > 0 ? (byKey[r.date + '|' + r.icode] || {})[SLOT_SEQ[i - 1]] : null;
+      if (prev && num(prev.qty_close) === o) r.openSuspect = true;
+    }
+  });
+}
+function restockTitle(r) { return `結束前庫存 ${r.qty_close} > 中段 ${r.mid_qty}：可能有加量操作，售出量預估可能偏低`; }
+function openFlagTitle(r) {
+  if (r.openSuspect) return `疑似異常：開檔為提前抓取的 ${r.qty_open}（與前一檔結束前相同），但中段已降到 ${r.mid_qty}，售出量可信度低`;
+  if (r.openSwitched) return `提前抓為 ${r.qty_pre}，開檔後 3 分鐘庫存驟降，已改用開檔後數字 ${r.qty_open}`;
+  return '';
+}
+
 function fmtInt(v) { const n = parseInt(v); return isNaN(n) ? v : n.toLocaleString('zh-TW'); }
+
+function updateFlagNotice() {
+  const el = document.getElementById('flagNotice');
+  const all = getFilteredData(true);
+  const suspect = all.filter(r => r.openSuspect).length;
+  const restock = all.filter(r => r.restock).length;
+  const switched = all.filter(r => r.openSwitched).length;
+  if (!suspect && !restock && !switched) { el.style.display = 'none'; return; }
+  const excl = document.getElementById('excludeSuspect').checked;
+  const parts = [];
+  if (suspect) parts.push(`<b>${suspect}</b> 筆疑似異常開檔列${excl ? '已排除，不計入統計' : '（目前已納入統計，可勾選上方選項排除）'}，履歷查詢中以 ⚠ 標示`);
+  if (switched) parts.push(`<b>${switched}</b> 筆因開檔後 3 分鐘庫存驟降，已改用開檔後數字（⚠）`);
+  if (restock) parts.push(`<b>${restock}</b> 筆「結束前 > 中段」（<span style="color:var(--purple);font-weight:700">紫字 ▲</span>），可能有加量操作，售出量預估偏低`);
+  el.style.display = 'block';
+  el.innerHTML = '📌 目前範圍內：' + parts.join('；') + '。';
+}
 
 function updateEstNotice(data) {
   const el = document.getElementById('estNotice');
@@ -416,7 +470,8 @@ function onManualDateChange() {
 }
 
 // 回傳目前期間篩選後的資料（依 startDate ~ endDate，皆為 YYYY/MM/DD 字串比較）
-function getFilteredData() {
+function getFilteredData(includeSuspect = false) {
+  const excl = !includeSuspect && document.getElementById('excludeSuspect').checked;
   const start = toDataDate(document.getElementById('startDate').value);
   const end   = toDataDate(document.getElementById('endDate').value);
   const l1 = document.getElementById('catL1Filter').value;
@@ -426,6 +481,7 @@ function getFilteredData() {
     if (end && r.date > end) return false;
     if (l1 && r.cat1 !== l1) return false;
     if (l2 && r.cat2 !== l2) return false;
+    if (excl && r.openSuspect) return false;
     return true;
   });
 }
@@ -488,6 +544,7 @@ function renderCurrentView() {
 
   const data = getFilteredData();
   updateEstNotice(data);
+  updateFlagNotice();
   // 階段2、3會依 sub 呼叫對應的 render 函式，目前先維持 placeholder
   if (typeof RENDERERS !== 'undefined' && RENDERERS[sub]) {
     RENDERERS[sub](data);
@@ -612,7 +669,7 @@ function renderHistory(data) {
 
 function onHistorySearchInput(val) {
   historySearchText = val;
-  updateHistorySearchResults(getFilteredData());
+  updateHistorySearchResults(getFilteredData(true));
 }
 
 function updateHistorySearchResults(data) {
@@ -646,7 +703,7 @@ function updateHistorySearchResults(data) {
 
 function selectHistoryProduct(icode) {
   historySelectedIcode = icode;
-  renderHistoryDetail(getFilteredData());
+  renderHistoryDetail(getFilteredData(true));
 }
 
 function renderHistoryDetail(data) {
@@ -661,12 +718,13 @@ function renderHistoryDetail(data) {
   }
 
   const first = rows[0];
-  const totalSold = rows.reduce((s, r) => s + (parseInt(r.sold) || 0), 0);
-  const rateRows = rows.filter(r => r.est !== 'doubt');   // 存疑紀錄不計入平均售出率
+  const statRows = document.getElementById('excludeSuspect').checked ? rows.filter(r => !r.openSuspect) : rows;   // 疑似異常開檔列依勾選決定是否計入統計
+  const totalSold = statRows.reduce((s, r) => s + (parseInt(r.sold) || 0), 0);
+  const rateRows = statRows.filter(r => r.est !== 'doubt');   // 存疑紀錄不計入平均售出率
   const avgRate = (rateRows.length ? rateRows.reduce((s, r) => s + (parseFloat(r.sell_rate) || 0), 0) / rateRows.length : 0).toFixed(1);
-  const soldOutCount = rows.filter(r => r.sold_out === '是').length;
+  const soldOutCount = statRows.filter(r => r.sold_out === '是').length;
   const rowRevenue = r => (parseInt(r.sold) || 0) * (parseFloat(r.price) || 0);
-  const totalRevenue = rows.reduce((s, r) => s + rowRevenue(r), 0);
+  const totalRevenue = statRows.reduce((s, r) => s + rowRevenue(r), 0);
   const hasEst = rows.some(r => r.est);
 
   const trs = rows.map(r => {
@@ -677,13 +735,13 @@ function renderHistoryDetail(data) {
       <td><span class="slot-tag ${slotTagClass(r.slot)}">${r.slot}</span></td>
       <td><span class="disc-badge">${r.discount}</span></td>
       <td class="qty">$${r.price}</td>
-      <td class="qty" ${isCalc ? `style="color:var(--red);font-weight:700" title="原始紀錄為 ${r.qty_open_raw}（漏讀千位數），以千位整數推估"` : isDoubt ? `style="color:var(--red)" title="數量存疑（漏讀千位數、無法推估），以 0 計。原始紀錄：${r.raw_text}"` : ''}>${isCalc ? '約' + fmtInt(r.qty_open) : r.qty_open}</td>
+      <td class="qty" ${isCalc ? `style="color:var(--red);font-weight:700" title="原始紀錄為 ${r.qty_open_raw}（漏讀千位數），以千位整數推估"` : isDoubt ? `style="color:var(--red)" title="數量存疑（漏讀千位數、無法推估），以 0 計。原始紀錄：${r.raw_text}"` : (r.openSuspect || r.openSwitched) ? `style="color:var(--orange);font-weight:700" title="${openFlagTitle(r)}"` : ''}>${isCalc ? '約' + fmtInt(r.qty_open) : r.qty_open}${(r.openSuspect || r.openSwitched) ? ' ⚠' : ''}</td>
       <td class="qty" ${(r.mid_est || isDoubt) ? 'style="color:var(--red)"' : ''} ${r.mid_est ? 'title="推估值"' : ''}>${r.mid_est ? '約' + fmtInt(mid) : mid}</td>
-      <td class="qty" ${isDoubt ? 'style="color:var(--red)"' : ''}>${r.qty_close}</td>
+      <td class="qty" ${isDoubt ? 'style="color:var(--red)"' : r.restock ? `style="color:var(--purple);font-weight:700" title="${restockTitle(r)}"` : ''}>${r.qty_close}${r.restock ? ' ▲' : ''}</td>
       <td class="qty" style="font-weight:700;color:${(isCalc || isDoubt) ? 'var(--red)' : (parseInt(r.sold)||0)>0?'var(--blue)':'var(--text-dim)'}" ${isCalc ? `title="原始紀錄為 ${r.sold_raw || 0}，依推估開檔量重算（保守估計）"` : ''}>${isCalc ? '約' + fmtInt(r.sold) : (r.sold || '-')}</td>
       <td class="qty" ${(isCalc || isDoubt) ? 'style="color:var(--red)"' : ''} ${isDoubt ? 'title="不計入平均售出率"' : ''}>${isDoubt ? '不計' : r.sell_rate + '%'}</td>
       <td class="qty" ${(isCalc || isDoubt) ? 'style="color:var(--red)"' : ''}>${isCalc ? '約' : ''}${fmtMoney(rowRevenue(r))}</td>
-      <td>${r.sold_out === '是' ? '🔥' : ''}</td>
+      <td>${r.sold_out === '是' ? '🔥' : ''}${r.restock ? '<span title="' + restockTitle(r) + '" style="color:var(--purple);font-size:11px;font-weight:700"> 📈加量</span>' : ''}${r.openSuspect ? '<span title="' + openFlagTitle(r) + '" style="color:var(--orange);font-size:11px;font-weight:700"> ⚠存疑</span>' : ''}</td>
     </tr>`;
   }).join('');
 
@@ -988,7 +1046,7 @@ function renderPrice(data) {
 new MutationObserver(() => decorateFormulas(document.getElementById('mainContent')))
   .observe(document.getElementById('mainContent'), { childList: true, subtree: true });
 
-const RENDERERS = { category: renderCategory, rank: renderRank, history: renderHistory, brand: renderBrand, slot: renderSlot, weekday: renderWeekday, price: renderPrice };
+const RENDERERS = { category: renderCategory, rank: renderRank, history: () => renderHistory(getFilteredData(true)), brand: renderBrand, slot: renderSlot, weekday: renderWeekday, price: renderPrice };
 </script>
 </body>
 </html>
