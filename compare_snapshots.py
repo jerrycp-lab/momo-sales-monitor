@@ -28,7 +28,8 @@ TW_TZ = timezone(timedelta(hours=8))
 OUTPUT_DIR  = "snapshots"
 ALL_RESULTS = os.path.join(OUTPUT_DIR, "all_results.csv")
 FIELDNAMES  = ["date","slot","icode","brand","name","discount","price",
-               "qty_open","mid_qty","qty_close","sold","sold_out","sell_rate"]
+               "qty_open","mid_qty","qty_close","sold","sold_out","sell_rate",
+               "open_source","qty_pre"]
 
 # momo 六個時段
 SLOT_LABELS = {
@@ -109,6 +110,8 @@ def compare(open_file: str, mid_file: str, close_file: str) -> list:
             "sold":      sold,
             "sold_out":  "是" if sold_out else "否",
             "sell_rate": rate,
+            "open_source": s.get("source", "") or "",
+            "qty_pre":   s.get("qty_pre", "") or "",
         })
 
     results.sort(key=lambda r: -(r["sold"] or 0))
@@ -126,8 +129,25 @@ def already_recorded(date_str: str, slot_str: str) -> bool:
     return False
 
 
+def migrate_header():
+    """all_results.csv 的表頭若缺新欄位（open_source, qty_pre），補上並把舊資料的新欄位留空"""
+    if not os.path.exists(ALL_RESULTS):
+        return
+    with open(ALL_RESULTS, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames == FIELDNAMES:
+            return
+        rows = list(reader)
+    with open(ALL_RESULTS, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore", restval="")
+        w.writeheader()
+        w.writerows(rows)
+    print(f"🔧 已更新 {ALL_RESULTS} 表頭（共 {len(rows)} 筆舊資料）")
+
+
 def append_to_all_results(results: list, date_str: str, slot_str: str):
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    migrate_header()
 
     # 防止重複寫入
     if already_recorded(date_str, slot_str):
@@ -154,6 +174,8 @@ def append_to_all_results(results: list, date_str: str, slot_str: str):
                 "sold":      r["sold"],
                 "sold_out":  r["sold_out"],
                 "sell_rate": r["sell_rate"],
+                "open_source": r.get("open_source", ""),
+                "qty_pre":   r.get("qty_pre", ""),
             })
 
     print(f"✅ 已追加 {len(results)} 筆 → {ALL_RESULTS}")
