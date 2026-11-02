@@ -14,6 +14,7 @@
   --orange:#ea580c; --orange-lt:#ffedd5;
   --red:#dc2626; --red-lt:#fee2e2;
   --momo:#e84393; --momo-lt:#fce7f3;
+  --purple:#7c3aed;
   --radius:10px; --shadow:0 1px 3px rgba(0,0,0,.08);
 }
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -170,6 +171,7 @@ tbody td{padding:9px 14px;vertical-align:middle;}
     </div>
   </div>
 
+  <div id="flagNotice" style="display:none;background:#fff7ed;color:#9a3412;padding:10px 16px;border-radius:var(--radius);margin-bottom:16px;font-size:12px"></div>
   <div id="errorMsg" class="error-msg" style="display:none"></div>
   <div id="loadingArea" class="loading">
     <div class="loading-spin">⏳</div>
@@ -188,7 +190,7 @@ tbody td{padding:9px 14px;vertical-align:middle;}
     <div class="card">
       <div class="card-header">
         <div class="card-title"><div class="card-dot" style="background:var(--momo)"></div>商品成效明細</div>
-        <div class="sort-note">依售出量排序 ・ <span style="color:var(--red)">紅字🔁</span> = 過去3日內重複上架</div>
+        <div class="sort-note">依售出量排序 ・ <span style="color:var(--red)">紅字🔁</span> = 過去3日內重複上架 ・ <span style="color:var(--purple)">紫字▲</span> = 結束前 > 中段（可能加量）</div>
       </div>
       <div style="overflow-x:auto">
         <table>
@@ -255,6 +257,7 @@ async function loadData() {
     allData = parseCSV(text);
 
     if (allData.length === 0) throw new Error('資料檔案是空的');
+    flagRows(allData);
 
     // 設定日期預設值為最新日期
     const dates = [...new Set(allData.map(r => r.date))].sort();
@@ -279,6 +282,40 @@ async function loadData() {
     errEl.textContent = '⚠️ 載入失敗：' + e.message + '（資料可能還未產生，請稍後重試）';
   }
 }
+
+// ── 資料旗標：加量／疑似異常開檔 ──
+// restock      ：結束前庫存 > 中段庫存 → 可能有加量操作，售出（= 開檔 − 結束前）預估偏低
+// openSuspect  ：2026/11/01 前的舊資料，開檔是「提前抓」、數字與同商品前一檔的結束前完全相同（共用庫存口徑），
+//                但中段已掉到開檔的 20% 以下（例：魚油 4476 → 290）。可信度低，預設不計入統計（可取消勾選）
+// openSwitched ：新版抓取程式發現開檔後 3 分鐘庫存驟降，已改用開檔後數字，qty_pre 保留提前抓的數字
+const OPEN_FIX_FROM = '2026/11/03';   // 此日起使用新版抓取程式（momo_scraper v11），之後不再用 openSuspect 規則
+const SLOT_SEQ = ['00:00','07:00','11:00','14:00','18:00','22:00'];
+function flagRows(rows) {
+  const num = v => (v !== undefined && v !== '' && /^\d+$/.test(v)) ? parseInt(v) : null;
+  const byKey = {};
+  rows.forEach(r => { (byKey[r.date + '|' + r.icode] = byKey[r.date + '|' + r.icode] || {})[r.slot] = r; });
+  rows.forEach(r => {
+    r.restock = false; r.openSuspect = false; r.openSwitched = false;
+    if (r.est) return;   // 千位數推估／存疑列已另外以紅字處理
+    const o = num(r.qty_open), m = num(r.mid_qty), c = num(r.qty_close), p = num(r.qty_pre);
+    // 2026/10/07 11:00 檔（含）以前的舊版程式會把千位數漏讀成個位數（中段 1～9），這種不當作加量
+    const oldParser = r.date < '2026/10/07' || (r.date === '2026/10/07' && r.slot <= '11:00');
+    if (m !== null && c !== null && c > m && !(oldParser && m <= 9)) r.restock = true;
+    if (p !== null && o !== null && p > o) r.openSwitched = true;
+    if (r.open_source === 'pre' && r.date < OPEN_FIX_FROM && o !== null && o >= 200 && m !== null && m <= o * 0.2) {
+      const i = SLOT_SEQ.indexOf(r.slot);
+      const prev = i > 0 ? (byKey[r.date + '|' + r.icode] || {})[SLOT_SEQ[i - 1]] : null;
+      if (prev && num(prev.qty_close) === o) r.openSuspect = true;
+    }
+  });
+}
+function restockTitle(r) { return `結束前庫存 ${r.qty_close} > 中段 ${r.mid_qty}：可能有加量操作，售出量預估可能偏低`; }
+function openFlagTitle(r) {
+  if (r.openSuspect) return `疑似異常：開檔為提前抓取的 ${r.qty_open}（與前一檔結束前相同），但中段已降到 ${r.mid_qty}，售出量可信度低`;
+  if (r.openSwitched) return `提前抓為 ${r.qty_pre}，開檔後 3 分鐘庫存驟降，已改用開檔後數字 ${r.qty_open}`;
+  return '';
+}
+
 
 function parseCSV(text) {
   const lines = text.trim().split('\n');
@@ -348,7 +385,8 @@ function showHistoryModal(icode) {
     const mid = (r.mid_qty !== undefined && r.mid_qty !== '') ? r.mid_qty : '-';
     return `<tr>
       <td>${r.date}</td><td>${r.slot}</td><td>${r.discount}</td><td>$${r.price}</td>
-      <td>${r.qty_open}</td><td>${mid}</td><td>${r.qty_close}</td>
+      <td ${(r.openSuspect || r.openSwitched) ? `style="color:var(--orange);font-weight:700" title="${openFlagTitle(r)}"` : ''}>${r.qty_open}${(r.openSuspect || r.openSwitched) ? ' ⚠' : ''}</td><td>${mid}</td>
+      <td ${r.restock ? `style="color:var(--purple);font-weight:700" title="${restockTitle(r)}"` : ''}>${r.qty_close}${r.restock ? ' ▲' : ''}</td>
       <td>${r.sold||'-'}</td><td>${r.sell_rate}%</td>
     </tr>`;
   }).join('');
@@ -365,14 +403,30 @@ function closeHistoryModal(e) {
 }
   
 function renderAll() {
-  const data = getFilteredData();
+  const allRows = getFilteredData();
+  const data = allRows.filter(r => !r.openSuspect);   // 統計排除疑似異常開檔列，表格仍顯示並標 ⚠
+  renderFlagNotice(allRows);
   const dateVal = document.getElementById('queryDate').value.replace(/-/g, '/');
   const dupSet = getDuplicateIcodeSet(dateVal);
   renderStats(data);
   renderSlotBar();
-  renderTable(data, dupSet);
+  renderTable(allRows, dupSet);
   renderDist(data);
   renderSummary(data);
+}
+
+function renderFlagNotice(rows) {
+  const el = document.getElementById('flagNotice');
+  const suspect = rows.filter(r => r.openSuspect).length;
+  const restock = rows.filter(r => r.restock).length;
+  const switched = rows.filter(r => r.openSwitched).length;
+  if (!suspect && !restock && !switched) { el.style.display = 'none'; return; }
+  const parts = [];
+  if (suspect) parts.push(`<b>${suspect}</b> 筆疑似異常開檔列（⚠存疑）已排除，不計入上方統計與下方分布／摘要`);
+  if (switched) parts.push(`<b>${switched}</b> 筆因開檔後 3 分鐘庫存驟降，已改用開檔後數字（⚠）`);
+  if (restock) parts.push(`<b>${restock}</b> 筆「結束前 > 中段」（<span style="color:var(--purple);font-weight:700">紫字 ▲</span>），可能有加量操作，售出量預估偏低`);
+  el.style.display = 'block';
+  el.innerHTML = '📌 本日範圍內：' + parts.join('；') + '。';
 }
 
 function renderStats(data) {
@@ -438,12 +492,12 @@ const isDup = dupSet.has(r.icode);
       <td><span class="slot-tag ${slotTagClass(r.slot)}">${r.slot}</span></td>
       <td><span class="disc-badge">${r.discount}</span></td>
       <td style="font-family:'DM Mono',monospace">$${r.price}</td>
-      <td class="qty">${r.qty_open}</td>
+      <td class="qty" ${(r.openSuspect || r.openSwitched) ? `style="color:var(--orange);font-weight:700" title="${openFlagTitle(r)}"` : ''}>${r.qty_open}${(r.openSuspect || r.openSwitched) ? ' ⚠' : ''}</td>
       <td class="qty">${midDisplay}</td>
-      <td class="qty">${r.qty_close}</td>
+      <td class="qty" ${r.restock ? `style="color:var(--purple);font-weight:700" title="${restockTitle(r)}"` : ''}>${r.qty_close}${r.restock ? ' ▲' : ''}</td>
       <td><span class="sold-num ${sold===0?'zero':''}" style="color:${sold>0?'var(--blue)':'var(--text-dim)'}">${sold||'-'}</span></td>
       <td><div class="rate-wrap"><div class="rate-track"><div class="rate-fill" style="width:${barW}%;background:${barColor}"></div></div><div style="font-size:11px;font-family:'DM Mono',monospace;min-width:38px;color:${barColor}">${rate}%</div></div></td>
-      <td>${isSoldOut?'<span class="sold-out-tag">🔥 售完</span>':''}</td>
+      <td>${isSoldOut?'<span class="sold-out-tag">🔥 售完</span>':''}${r.restock?'<span title="'+restockTitle(r)+'" style="color:var(--purple);font-size:11px;font-weight:700"> 📈加量</span>':''}${r.openSuspect?'<span title="'+openFlagTitle(r)+'" style="color:var(--orange);font-size:11px;font-weight:700"> ⚠存疑</span>':''}</td>
     </tr>`;
   }).join('');
   document.getElementById('resultTable').innerHTML = rows || '<tr><td colspan="11" style="text-align:center;color:var(--text-dim);padding:30px">此日期/時段無資料</td></tr>';
