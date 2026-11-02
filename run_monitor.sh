@@ -11,6 +11,7 @@ python3 momo_scraper.py "$CHECKPOINT"
 # 只有在 close 檢查點才進行成效計算（因為要等 open+mid+close 三個檔案都齊了）
 if [ "$CHECKPOINT" == "close" ]; then
     python3 compare_snapshots.py
+    python3 check_anomalies.py || echo "⚠️ 告警檢查失敗，略過"
 fi
 
 # 開檔時抓當檔新商品的 momo 分類（大類/中類），失敗不影響後面的流程
