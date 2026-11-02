@@ -29,7 +29,7 @@ OUTPUT_DIR  = "snapshots"
 ALL_RESULTS = os.path.join(OUTPUT_DIR, "all_results.csv")
 FIELDNAMES  = ["date","slot","icode","brand","name","discount","price",
                "qty_open","mid_qty","qty_close","sold","sold_out","sell_rate",
-               "open_source","qty_pre"]
+               "open_source","qty_pre","data_flag","raw_values"]
 
 # momo 六個時段
 SLOT_LABELS = {
@@ -130,19 +130,26 @@ def already_recorded(date_str: str, slot_str: str) -> bool:
 
 
 def migrate_header():
-    """all_results.csv 的表頭若缺新欄位（open_source, qty_pre），補上並把舊資料的新欄位留空"""
+    """all_results.csv 的表頭若缺新欄位，補在最後並把舊資料的新欄位留空；既有欄位（含腳本沒認得的）一律保留"""
     if not os.path.exists(ALL_RESULTS):
         return
     with open(ALL_RESULTS, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
-        if reader.fieldnames == FIELDNAMES:
+        existing = list(reader.fieldnames or [])
+        missing = [c for c in FIELDNAMES if c not in existing]
+        if not missing:
             return
         rows = list(reader)
     with open(ALL_RESULTS, "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore", restval="")
+        w = csv.DictWriter(f, fieldnames=existing + missing, restval="")
         w.writeheader()
         w.writerows(rows)
-    print(f"🔧 已更新 {ALL_RESULTS} 表頭（共 {len(rows)} 筆舊資料）")
+    print(f"🔧 已補上 {ALL_RESULTS} 缺少的欄位 {missing}（共 {len(rows)} 筆舊資料）")
+
+
+def current_header() -> list:
+    with open(ALL_RESULTS, encoding="utf-8-sig", newline="") as f:
+        return list(csv.DictReader(f).fieldnames or FIELDNAMES)
 
 
 def append_to_all_results(results: list, date_str: str, slot_str: str):
@@ -155,8 +162,9 @@ def append_to_all_results(results: list, date_str: str, slot_str: str):
         return
 
     file_exists = os.path.exists(ALL_RESULTS)
+    fields = current_header() if file_exists else FIELDNAMES   # 依檔案現有表頭順序寫入，不打亂已加工的欄位
     with open(ALL_RESULTS, "a", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore", restval="")
         if not file_exists:
             writer.writeheader()
         for r in results:
@@ -176,6 +184,8 @@ def append_to_all_results(results: list, date_str: str, slot_str: str):
                 "sell_rate": r["sell_rate"],
                 "open_source": r.get("open_source", ""),
                 "qty_pre":   r.get("qty_pre", ""),
+                "data_flag": "",
+                "raw_values": "",
             })
 
     print(f"✅ 已追加 {len(results)} 筆 → {ALL_RESULTS}")
