@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 程式作業，銷售監控</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&family=DM+Mono:wght@400;500&display=swap');
+:root {
+  --bg:#f0f4f8; --surface:#fff; --border:#e2e8f0; --border2:#cbd5e1;
+  --text:#1e293b; --text-mid:#475569; --text-dim:#94a3b8;
+  --blue:#2563eb; --blue-lt:#dbeafe;
+  --green:#16a34a; --green-lt:#dcfce7;
+  --orange:#ea580c; --orange-lt:#ffedd5;
+  --red:#dc2626; --red-lt:#fee2e2;
+  --momo:#e84393; --momo-lt:#fce7f3;
+  --radius:10px; --shadow:0 1px 3px rgba(0,0,0,.08);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-serif;font-size:13px;}
+::-webkit-scrollbar{width:5px;} ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px;}
+
+/* TOPBAR */
+.topbar{background:#1a3a5c;color:#fff;padding:0 24px;height:52px;display:flex;align-items:center;justify-content:space-between;}
+.topbar-logo{font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px;}
+.topbar-logo .icon{width:32px;height:32px;border-radius:8px;background:var(--blue);display:flex;align-items:center;justify-content:center;font-size:16px;}
+.topbar-right{display:flex;align-items:center;gap:16px;font-size:12px;color:rgba(255,255,255,.6);}
+.live-dot{width:7px;height:7px;border-radius:50%;background:#4ade80;animation:blink 2s infinite;display:inline-block;margin-right:4px;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* CONTENT */
+.content{padding:20px 24px;}
+
+/* 查詢列 */
+.query-bar{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px 20px;margin-bottom:16px;display:flex;align-items:center;gap:12px;box-shadow:var(--shadow);flex-wrap:wrap;}
+.q-label{font-size:13px;font-weight:700;color:var(--text-mid);white-space:nowrap;}
+.q-date{padding:6px 12px;border-radius:7px;border:1px solid var(--border2);font-family:inherit;font-size:13px;color:var(--text);background:var(--bg);outline:none;cursor:pointer;}
+.q-date:focus{border-color:var(--blue);}
+.slot-btn{padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid var(--border);background:transparent;font-family:inherit;color:var(--text-dim);transition:all .15s;font-weight:600;}
+.slot-btn:hover{border-color:var(--momo);color:var(--momo);}
+.slot-btn.active{background:var(--momo);color:#fff;border-color:var(--momo);}
+.slot-btn.all.active{background:var(--blue);border-color:var(--blue);}
+.q-right{margin-left:auto;display:flex;align-items:center;gap:10px;}
+.reload-btn{padding:6px 14px;border-radius:7px;background:var(--blue);color:#fff;border:none;font-size:12px;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;}
+.reload-btn:hover{background:#1d4ed8;}
+.last-update{font-size:11px;color:var(--text-dim);}
+
+/* 統計卡 */
+.stat-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px;}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;box-shadow:var(--shadow);}
+.sc-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;}
+.sc-label{font-size:11px;color:var(--text-dim);}
+.sc-ico{font-size:18px;}
+.sc-val{font-size:22px;font-weight:700;font-family:'DM Mono',monospace;}
+.sc-note{font-size:11px;color:var(--text-dim);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+
+/* 時段進度 */
+.slot-bar{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;gap:8px;box-shadow:var(--shadow);flex-wrap:wrap;}
+.slot-chip{display:flex;align-items:center;gap:4px;padding:4px 10px;border-radius:10px;font-size:11px;font-weight:700;border:1px solid var(--border);}
+.slot-chip.done{background:var(--green-lt);color:var(--green);border-color:#86efac;}
+.slot-chip.active{background:var(--momo);color:#fff;border-color:var(--momo);}
+.slot-chip.pending{color:var(--text-dim);background:#f8fafc;}
+.slot-dot{width:5px;height:5px;border-radius:50%;background:currentColor;}
+.slot-chip.active .slot-dot{background:#fff;animation:blink 1.5s infinite;}
+
+/* 主表格 */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px;}
+.card-header{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border);}
+.card-title{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px;}
+.card-dot{width:7px;height:7px;border-radius:50%;}
+.sort-note{font-size:11px;color:var(--text-dim);}
+table{width:100%;border-collapse:collapse;}
+thead th{padding:9px 14px;text-align:left;font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.8px;background:#f8fafc;border-bottom:1px solid var(--border);font-weight:500;}
+tbody tr{border-bottom:1px solid var(--border);transition:background .12s;}
+tbody tr:last-child{border-bottom:none;}
+tbody tr:hover{background:#f8fafc;}
+tbody td{padding:9px 14px;vertical-align:middle;}
+.slot-tag{font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700;white-space:nowrap;}
+.tag-0000{background:#f1f5f9;color:#64748b;}
+.tag-0700{background:var(--green-lt);color:var(--green);}
+.tag-1100{background:var(--blue-lt);color:var(--blue);}
+.tag-1400{background:#ede9fe;color:#7c3aed;}
+.tag-1800{background:var(--orange-lt);color:var(--orange);}
+.tag-2200{background:#fce7f3;color:var(--momo);}
+.prod-name{font-weight:600;font-size:12px;}
+.prod-brand{font-size:11px;color:var(--text-dim);}
+.disc-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;background:var(--orange-lt);color:var(--orange);}
+.rate-wrap{display:flex;align-items:center;gap:7px;}
+.rate-track{width:70px;height:5px;background:var(--border);border-radius:3px;overflow:hidden;}
+.rate-fill{height:100%;border-radius:3px;}
+.sold-num{font-family:'DM Mono',monospace;font-size:14px;font-weight:700;}
+.sold-out-tag{display:inline-flex;align-items:center;gap:2px;padding:2px 6px;border-radius:4px;background:var(--red-lt);color:var(--red);font-size:10px;font-weight:700;}
+.qty{font-family:'DM Mono',monospace;font-size:12px;}
+.zero{color:var(--text-dim);}
+
+/* 底部 */
+.bottom-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.dist-body{padding:16px;}
+.dist-title{font-size:12px;font-weight:700;color:var(--text-mid);margin-bottom:12px;}
+.dist-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+.dist-lbl{width:80px;font-size:11px;color:var(--text-dim);flex-shrink:0;}
+.dist-track{flex:1;height:16px;background:var(--border);border-radius:4px;overflow:hidden;}
+.dist-fill{height:100%;border-radius:4px;display:flex;align-items:center;padding-left:8px;font-size:10px;color:#fff;font-weight:700;}
+.dist-n{width:20px;text-align:right;font-size:11px;font-family:'DM Mono',monospace;color:var(--text-dim);}
+.sum-body{padding:16px;}
+.sum-title{font-size:12px;font-weight:700;color:var(--text-mid);margin-bottom:12px;}
+.sum-row{display:flex;justify-content:space-between;padding:8px 12px;border-radius:7px;background:var(--bg);margin-bottom:6px;font-size:12px;}
+.sum-lbl{color:var(--text-mid);}
+.sum-val{font-family:'DM Mono',monospace;font-weight:700;}
+
+/* 載入狀態 */
+.loading{text-align:center;padding:60px;color:var(--text-dim);}
+.loading-spin{font-size:32px;animation:spin 1s linear infinite;display:inline-block;margin-bottom:12px;}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.error-msg{background:var(--red-lt);color:var(--red);padding:16px;border-radius:var(--radius);margin-bottom:16px;font-size:13px;}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo">
+    <div class="icon">📦</div>
+    AI 程式作業，銷售監控
+  </div>
+  <div class="topbar-right">
+    <span><span class="live-dot"></span>即時資料</span>
+    <span id="lastUpdate">載入中...</span>
+  </div>
+</div>
+
+<div class="content">
+
+  <!-- 查詢列 -->
+  <div class="query-bar">
+    <span class="q-label">📅 日期</span>
+    <input type="date" id="queryDate" class="q-date" onchange="filterData()">
+    <span class="q-label">時段</span>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;" id="slotBtns">
+      <button class="slot-btn all active" onclick="selectSlot('all',this)">全部</button>
+      <button class="slot-btn" onclick="selectSlot('00:00',this)">00:00</button>
+      <button class="slot-btn" onclick="selectSlot('07:00',this)">07:00</button>
+      <button class="slot-btn" onclick="selectSlot('11:00',this)">11:00</button>
+      <button class="slot-btn" onclick="selectSlot('14:00',this)">14:00</button>
+      <button class="slot-btn" onclick="selectSlot('18:00',this)">18:00</button>
+      <button class="slot-btn" onclick="selectSlot('22:00',this)">22:00</button>
+    </div>
+    <div class="q-right">
+      <span class="last-update" id="csvLastUpdate"></span>
+      <button class="reload-btn" onclick="loadData()">🔄 重新載入</button>
+    </div>
+  </div>
+
+  <div id="errorMsg" class="error-msg" style="display:none"></div>
+  <div id="loadingArea" class="loading">
+    <div class="loading-spin">⏳</div>
+    <div>載入資料中...</div>
+  </div>
+
+  <div id="mainContent" style="display:none">
+
+    <!-- 統計卡 -->
+    <div class="stat-grid" id="statCards"></div>
+
+    <!-- 時段進度 -->
+    <div class="slot-bar" id="slotBar"></div>
+
+    <!-- 成效表格 -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title"><div class="card-dot" style="background:var(--momo)"></div>商品成效明細</div>
+        <div class="sort-note">依售出量排序</div>
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>商品名稱</th><th>時段</th>
+              <th>折扣</th><th>活動價</th>
+              <th>開檔</th><th>結束前</th><th>售出</th><th>售出率</th><th>狀態</th>
+            </tr>
+          </thead>
+          <tbody id="resultTable"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 底部 -->
+    <div class="bottom-grid">
+      <div class="card">
+        <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--green)"></div>售出率分布</div></div>
+        <div class="dist-body" id="distChart"></div>
+      </div>
+      <div class="card">
+        <div class="card-header"><div class="card-title"><div class="card-dot" style="background:var(--orange)"></div>本日摘要</div></div>
+        <div class="sum-body" id="summary"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── 設定：你的 GitHub 帳號和 repo 名稱 ──
+const GITHUB_USER = 'cp630410';
+const GITHUB_REPO = 'momo-sales-monitor';
+const CSV_URL = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}/main/snapshots/all_results.csv`;
+// ─────────────────────────────────────────
+
+let allData = [];
+let curSlot = 'all';
+
+// 頁面載入時自動讀取資料
+window.addEventListener('load', loadData);
+
+async function loadData() {
+  document.getElementById('loadingArea').style.display = 'block';
+  document.getElementById('mainContent').style.display = 'none';
+  document.getElementById('errorMsg').style.display = 'none';
+
+  try {
+    // 加上時間戳避免瀏覽器 cache
+    const res = await fetch(CSV_URL + '?t=' + Date.now());
+    if (!res.ok) throw new Error('無法讀取資料（' + res.status + '）');
+    const text = await res.text();
+    allData = parseCSV(text);
+
+    if (allData.length === 0) throw new Error('資料檔案是空的');
+
+    // 設定日期預設值為最新日期
+    const dates = [...new Set(allData.map(r => r.date))].sort();
+    const latestDate = dates[dates.length - 1];
+    const dateInput = document.getElementById('queryDate');
+    if (latestDate) {
+      dateInput.value = latestDate.replace(/\//g, '-');
+    }
+    dateInput.max = new Date().toISOString().split('T')[0];
+
+    document.getElementById('lastUpdate').textContent = '最後載入：' + new Date().toLocaleTimeString('zh-TW');
+    document.getElementById('csvLastUpdate').textContent = '資料日期：' + latestDate;
+
+    document.getElementById('loadingArea').style.display = 'none';
+    document.getElementById('mainContent').style.display = 'block';
+    renderAll();
+
+  } catch(e) {
+    document.getElementById('loadingArea').style.display = 'none';
+    const errEl = document.getElementById('errorMsg');
+    errEl.style.display = 'block';
+    errEl.textContent = '⚠️ 載入失敗：' + e.message + '（資料可能還未產生，請稍後重試）';
+  }
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^\uFEFF/,''));
+  return lines.slice(1).map(line => {
+    const vals = line.split(',');
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = (vals[i] || '').trim());
+    return obj;
+  }).filter(r => r.date);
+}
+
+function selectSlot(slot, btn) {
+  document.querySelectorAll('.slot-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  curSlot = slot;
+  renderAll();
+}
+
+function filterData() { renderAll(); }
+
+function getFilteredData() {
+  const dateVal = document.getElementById('queryDate').value.replace(/-/g, '/');
+  return allData.filter(r => {
+    const dateMatch = !dateVal || r.date === dateVal;
+    const slotMatch = curSlot === 'all' || r.slot === curSlot;
+    return dateMatch && slotMatch;
+  });
+}
+
+function renderAll() {
+  const data = getFilteredData();
+  renderStats(data);
+  renderSlotBar();
+  renderTable(data);
+  renderDist(data);
+  renderSummary(data);
+}
+
+function renderStats(data) {
+  const total    = data.length;
+  const hasSales = data.filter(r => parseInt(r.sold) > 0).length;
+  const soldOut  = data.filter(r => r.sold_out === '是').length;
+  const maxSold  = data.reduce((m, r) => Math.max(m, parseInt(r.sold)||0), 0);
+  const maxItem  = data.find(r => (parseInt(r.sold)||0) === maxSold);
+  const avgRate  = data.length ? (data.reduce((s,r)=>s+(parseFloat(r.sell_rate)||0),0)/data.length).toFixed(1) : 0;
+
+  document.getElementById('statCards').innerHTML = `
+    <div class="stat-card"><div class="sc-row"><div class="sc-label">查詢商品數</div><div class="sc-ico">🛒</div></div><div class="sc-val" style="color:var(--blue)">${total}</div><div class="sc-note">${curSlot==='all'?'全時段':'僅 '+curSlot+' 檔'}</div></div>
+    <div class="stat-card"><div class="sc-row"><div class="sc-label">有銷售商品</div><div class="sc-ico">✅</div></div><div class="sc-val" style="color:var(--green)">${hasSales}</div><div class="sc-note">${total?((hasSales/total*100).toFixed(0))+'% 商品有賣出':'-'}</div></div>
+    <div class="stat-card"><div class="sc-row"><div class="sc-label">售完下架</div><div class="sc-ico">🔥</div></div><div class="sc-val" style="color:var(--red)">${soldOut}</div><div class="sc-note">100% 售出率</div></div>
+    <div class="stat-card"><div class="sc-row"><div class="sc-label">最高售出量</div><div class="sc-ico">🏆</div></div><div class="sc-val" style="color:var(--orange)">${maxSold}</div><div class="sc-note">${maxItem?maxItem.name.slice(0,12):'—'}</div></div>
+    <div class="stat-card"><div class="sc-row"><div class="sc-label">平均售出率</div><div class="sc-ico">📊</div></div><div class="sc-val" style="color:var(--text-mid)">${avgRate}%</div><div class="sc-note">全部商品平均</div></div>
+  `;
+}
+
+function renderSlotBar() {
+  const dateVal = document.getElementById('queryDate').value.replace(/-/g,'/');
+  const slots = ['00:00','07:00','11:00','14:00','18:00','22:00'];
+  const doneSlots = [...new Set(allData.filter(r=>r.date===dateVal).map(r=>r.slot))];
+  const now = new Date();
+  const chips = slots.map(s => {
+    const isDone = doneSlots.includes(s);
+    const h = parseInt(s);
+    const isPast = now.getHours() > h || (now.getHours() === h && now.getMinutes() > 5);
+    let cls = 'pending';
+    if (isDone) cls = 'done';
+    else if (isPast) cls = 'pending';
+    return `<div class="slot-chip ${cls}"><div class="slot-dot"></div>${s}${isDone?' ✓':''}</div>`;
+  }).join('');
+  document.getElementById('slotBar').innerHTML =
+    `<span style="font-size:11px;color:var(--text-dim);white-space:nowrap">今日時段</span>${chips}`;
+}
+
+function slotTagClass(slot) {
+  const map = {'00:00':'tag-0000','07:00':'tag-0700','11:00':'tag-1100','14:00':'tag-1400','18:00':'tag-1800','22:00':'tag-2200'};
+  return map[slot] || 'tag-0700';
+}
+
+function renderTable(data) {
+  const sorted = [...data].sort((a,b) => (parseInt(b.sold)||0)-(parseInt(a.sold)||0));
+  const rows = sorted.map((r, i) => {
+    const sold = parseInt(r.sold) || 0;
+    const rate = parseFloat(r.sell_rate) || 0;
+    const isSoldOut = r.sold_out === '是';
+    const barColor = rate >= 30 ? 'var(--red)' : rate >= 10 ? 'var(--orange)' : rate > 0 ? 'var(--blue)' : 'var(--border2)';
+    const barW = Math.min(rate, 100);
+    return `<tr>
+      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i+1}</td>
+      <td><div class="prod-name">${r.name}</div><div class="prod-brand">${r.brand}</div></td>
+      <td><span class="slot-tag ${slotTagClass(r.slot)}">${r.slot}</span></td>
+      <td><span class="disc-badge">${r.discount}</span></td>
+      <td style="font-family:'DM Mono',monospace">$${r.price}</td>
+      <td class="qty">${r.qty_open}</td>
+      <td class="qty">${r.qty_close}</td>
+      <td><span class="sold-num ${sold===0?'zero':''}" style="color:${sold>0?'var(--blue)':'var(--text-dim)'}">${sold||'-'}</span></td>
+      <td><div class="rate-wrap"><div class="rate-track"><div class="rate-fill" style="width:${barW}%;background:${barColor}"></div></div><div style="font-size:11px;font-family:'DM Mono',monospace;min-width:38px;color:${barColor}">${rate}%</div></div></td>
+      <td>${isSoldOut?'<span class="sold-out-tag">🔥 售完</span>':''}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('resultTable').innerHTML = rows || '<tr><td colspan="10" style="text-align:center;color:var(--text-dim);padding:30px">此日期/時段無資料</td></tr>';
+}
+
+function renderDist(data) {
+  const ranges = [
+    {lbl:'售完（100%）', min:100, max:100, color:'var(--red)'},
+    {lbl:'30–99%',       min:30,  max:99,  color:'var(--orange)'},
+    {lbl:'10–30%',       min:10,  max:29,  color:'#eab308'},
+    {lbl:'1–10%',        min:1,   max:9,   color:'var(--blue)'},
+    {lbl:'0%（零售）',   min:0,   max:0,   color:'var(--border2)'},
+  ];
+  const maxCount = Math.max(...ranges.map(r => data.filter(d => {
+    const rt = parseFloat(d.sell_rate)||0;
+    return rt >= r.min && rt <= r.max;
+  }).length), 1);
+
+  const bars = ranges.map(r => {
+    const cnt = data.filter(d => {
+      const rt = parseFloat(d.sell_rate)||0;
+      return rt >= r.min && rt <= r.max;
+    }).length;
+    const w = Math.round(cnt / maxCount * 100);
+    return `<div class="dist-row">
+      <div class="dist-lbl">${r.lbl}</div>
+      <div class="dist-track"><div class="dist-fill" style="width:${w}%;background:${r.color}">${cnt>0?cnt:''}</div></div>
+      <div class="dist-n">${cnt}</div>
+    </div>`;
+  }).join('');
+  document.getElementById('distChart').innerHTML = `<div class="dist-title">售出率區間分布（${data.length} 件）</div>${bars}`;
+}
+
+function renderSummary(data) {
+  const total   = data.length;
+  const hasSold = data.filter(r => parseInt(r.sold)>0);
+  const soldOut = data.filter(r => r.sold_out==='是');
+  const zeroSale= data.filter(r => (parseInt(r.sold)||0)===0);
+  const topItem = [...data].sort((a,b)=>(parseInt(b.sold)||0)-(parseInt(a.sold)||0))[0];
+  const topRate = [...data].sort((a,b)=>(parseFloat(b.sell_rate)||0)-(parseFloat(a.sell_rate)||0))[0];
+  const avgRate = total ? (data.reduce((s,r)=>s+(parseFloat(r.sell_rate)||0),0)/total).toFixed(1) : 0;
+
+  document.getElementById('summary').innerHTML = `
+    <div class="sum-title">篩選範圍摘要</div>
+    <div class="sum-row"><span class="sum-lbl">商品數</span><span class="sum-val">${total} 件</span></div>
+    <div class="sum-row"><span class="sum-lbl">有銷售</span><span class="sum-val" style="color:var(--green)">${hasSold.length} 件（${total?(hasSold.length/total*100).toFixed(0):0}%）</span></div>
+    <div class="sum-row"><span class="sum-lbl">售完下架</span><span class="sum-val" style="color:var(--red)">${soldOut.length} 件</span></div>
+    <div class="sum-row"><span class="sum-lbl">零銷售</span><span class="sum-val" style="color:var(--text-dim)">${zeroSale.length} 件</span></div>
+    <div class="sum-row"><span class="sum-lbl">最高售出量</span><span class="sum-val" style="color:var(--blue)">${topItem?(parseInt(topItem.sold)||0)+' 件（'+topItem.name.slice(0,10)+'）':'—'}</span></div>
+    <div class="sum-row"><span class="sum-lbl">最高售出率</span><span class="sum-val" style="color:var(--momo)">${topRate?(parseFloat(topRate.sell_rate)||0)+'%（'+topRate.name.slice(0,10)+'）':'—'}</span></div>
+    <div class="sum-row"><span class="sum-lbl">平均售出率</span><span class="sum-val">${avgRate}%</span></div>
+  `;
+}
+</script>
+</body>
+</html>
