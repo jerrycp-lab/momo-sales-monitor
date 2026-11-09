@@ -50,3 +50,25 @@ def apply_light_mode(page):
         if route.request.resource_type in ("image", "media", "font")
         else route.continue_(),
     )
+
+
+INIT_JS = "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
+
+
+def open_page(p):
+    """開啟瀏覽器與分頁（新版無頭 + 去除自動化特徵 + 台灣語系時區）。有 proxy.conf 就走代理。
+    回傳 (browser, page)。2026-11 起 momo 會擋舊版無頭瀏覽器，實測這組設定可通過。"""
+    kw = dict(headless=True, channel="chromium",
+              args=["--disable-blink-features=AutomationControlled"], **launch_args())
+    try:
+        browser = p.chromium.launch(**kw)
+    except Exception:
+        kw.pop("channel")          # 舊版 Playwright 沒有 channel=chromium 時退回一般無頭
+        browser = p.chromium.launch(**kw)
+    ua = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+          f"Chrome/{browser.version} Safari/537.36")
+    ctx = browser.new_context(user_agent=ua, locale="zh-TW", timezone_id="Asia/Taipei")
+    page = ctx.new_page()
+    page.add_init_script(INIT_JS)
+    apply_light_mode(page)
+    return browser, page
