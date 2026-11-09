@@ -10,9 +10,7 @@ px = proxy_config.load()
 print("代理：", (px or {}).get("server", "未設定（直接連線）"))
 size = {"bytes": 0}
 with sync_playwright() as p:
-    b = p.chromium.launch(headless=True, **proxy_config.launch_args())
-    pg = b.new_page()
-    proxy_config.apply_light_mode(pg)
+    b, pg = proxy_config.open_page(p)
     def on_resp(r):
         try:
             size["bytes"] += int(r.headers.get("content-length", 0))
