@@ -278,16 +278,7 @@ def run(checkpoint: str):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, **proxy_config.launch_args())
-            page    = browser.new_page(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                )
-            )
-
-            proxy_config.apply_light_mode(page)
+            browser, page = proxy_config.open_page(p)
 
             print(f"  開啟頁面：{MOMO_URL}")
             ok, err_reason = goto_with_retry(page, MOMO_URL)
