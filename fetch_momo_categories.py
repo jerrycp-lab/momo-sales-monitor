@@ -1,263 +1,357 @@
 # -*- coding: utf-8 -*-
 """
-momo 商品分類抓取程式 v2（大類 + 中類）
+momo 限時搶購 - 商品資料抓取程式 v11
 
-v2 改動（2026/10）：
-  - 改讀商品頁內嵌的結構化資料（JSON-LD BreadcrumbList），
-    不再解析畫面上的麵包屑樣式，比 v1 穩定
-  - 一次取得「大類」與「中類」兩層，連同 momo 的分類代碼
-    品牌旗艦館的商品：大類 = 品牌旗艦，中類 = 品牌名（照 momo 原樣）
-  - 只處理「當檔」商品：讀最新一份 *_open.csv，只查對照表裡還沒有的品號
-  - 分類對照表 snapshots/momo_categories.csv：品號查過一次就不再查
-  - 失敗自動重試（5 秒 / 15 秒 / 45 秒），每筆間隔 2~4 秒隨機
-  - 仍失敗的記到 snapshots/momo_category_failures.csv，之後自動補抓，
-    同一品號累計失敗 3 次就不再嘗試
-  - 每次順便補抓少量歷史商品（BACKFILL_PER_RUN），慢慢把舊資料補齊
+v11 新增內容（2026/11）：
+  - 修正「提前抓」數字口徑不同的問題：2026/11/01 22:00 魚油，提前抓到 4476
+    （與前一檔結束前相同），開檔後 3 分鐘實際只剩 290，結果售出被算成 4198。
+    現在開檔後 3 分鐘補抓時，若數量比提前抓「少一半以上」（PRE_DROP_RATIO），
+    改用開檔後的數字，並把提前抓的數字存在新欄位 qty_pre 供檢視；
+    數量差不多就維持提前抓（保留「第一分鐘就被秒殺也抓得到原量」的好處）；
+    開檔後數量為 0 的仍沿用提前抓（代表開檔瞬間賣完）。
+
+v10 新增內容（2026/10）：
+v10 新增內容（2026/10）：
+  - 開檔資料改為「提前抓」：每次 open（以及 close）執行時，順便把
+    「下一檔」的商品與數量先存成下一檔的 _open.csv。
+    例如 11:03 就先存好 14:00 檔的開檔資料，避免大活動開搶第一分鐘
+    就被秒殺、開檔後才抓會抓不到原始數量。
+    close（結束前5分）會再更新一次，讓數字更接近真正開檔前的狀態。
+  - 開檔後 3 分鐘的 open 執行改為「補抓」：只有提前抓的資料裡數量
+    是 0 或空白的商品、以及提前抓時還沒出現的商品，才用這次的資料補上；
+    如果完全沒有提前抓到（例如跨日的 00:00 檔），就照舊整檔重抓。
+  - 修正數量解析：「倒數：1,951組」以前只會讀到 1，現在正確讀成 1951
+  - 當檔區塊改用頁面上的時段文字比對，找不到才退回用第 1 個區塊
+  - 快照多一欄 source：pre = 提前抓、open = 開檔後抓
+
+v9 新增內容：
+  - 抓取失敗自動記錄：當頁面載入逾時（重試後仍失敗）、找不到
+    .MENTAL 區塊、或發生其他預期外錯誤時，會將失敗事件記錄到
+    snapshots/scrape_failures.csv，方便之後離線檢視追蹤穩定性，
+    不需要每次都去 log 檔案裡翻找。
+  - 記錄欄位：timestamp（記錄時間）、date（時段日期）、
+    slot（時段代碼）、checkpoint（open/mid/close）、reason（原因）
+
+沿用 v8 修正內容：
+  - page.goto 加上重試機制（逾時45秒，最多重試2次）
+  - date_str 在 run() 一開始就固定，避免跨午夜日期錯位
+
+沿用先前版本邏輯：
+  - 每次執行只抓「當前時段」一筆資料，checkpoint 參數決定
+    這次是 open（開檔）/ mid（時段中點）/ close（結束前5分）
+  - CLOSE 抓取邏輯：直接用 .MENTAL 區塊第1個（mentals[0]）
+    作為當前時段，不依賴已失效的 #posTag1
 
 執行方式：
-  python3 fetch_momo_categories.py            # 當檔新商品 + 少量歷史補抓
-  python3 fetch_momo_categories.py --no-backfill   # 只抓當檔新商品
+  python momo_scraper.py open
+  python momo_scraper.py mid
+  python momo_scraper.py close
 """
 
-import csv
-import os
 import re
 import sys
-import time
-import random
-from glob import glob
+import csv
+import os
 from datetime import datetime, timezone, timedelta
+from playwright.sync_api import sync_playwright
+import proxy_config
 
-TW_TZ = timezone(timedelta(hours=8))
+TW_TZ      = timezone(timedelta(hours=8))
+MOMO_URL   = "https://www.momoshop.com.tw/edm/cmmedm.jsp?lpn=O1K5FBOqsvN&n=1"
 OUTPUT_DIR = "snapshots"
-ALL_RESULTS = os.path.join(OUTPUT_DIR, "all_results.csv")
-CATEGORIES_FILE = os.path.join(OUTPUT_DIR, "momo_categories.csv")
-FAILURES_FILE = os.path.join(OUTPUT_DIR, "momo_category_failures.csv")
-MOMO_URL = "https://www.momoshop.com.tw/edm/cmmedm.jsp?lpn=O1K5FBOqsvN&n=1"
+FAILURE_LOG = os.path.join(OUTPUT_DIR, "scrape_failures.csv")
 
-# 注意：product_name 放最後一欄，analysis.html 是用逗號直接切欄位，
-# 品名裡若有逗號也不會影響前面的分類欄位
-CAT_FIELDS = ["icode", "cat_l1", "cat_l1_code", "cat_l2", "cat_l2_code",
-              "updated_at", "product_name"]
-FAIL_FIELDS = ["timestamp", "icode", "reason"]
+VALID_CHECKPOINTS = ("open", "mid", "close")
 
-BACKFILL_PER_RUN = 20      # 每次順便補抓幾筆歷史商品（設 0 就不補）
-MAX_PER_RUN = 70           # 單次執行最多查幾個商品頁（保險上限）
-WAIT_MIN_SEC, WAIT_MAX_SEC = 2.0, 4.0
-RETRY_WAITS_SEC = [5, 15, 45]
-MAX_FAIL_RUNS = 3          # 同一品號累計失敗幾次後就放棄
+GOTO_TIMEOUT_MS = 45000   # 頁面載入逾時時間
+MAX_RETRIES     = 2       # 最多重試 2 次（總共嘗試 3 次）
+RETRY_WAIT_MS   = 5000    # 每次重試前等待 5 秒
 
-# 在 momo 頁面內執行：用同一個瀏覽器工作階段去讀商品頁，取出麵包屑
-FETCH_JS = r"""
-async (icode) => {
-  try {
-    const r = await fetch('/goods/GoodsDetail.jsp?i_code=' + icode, {credentials: 'include'});
-    const t = await r.text();
-    const m = t.match(/"@type":\s*"BreadcrumbList"[\s\S]*?"itemListElement":\s*(\[[\s\S]*?\])\s*\}/);
-    if (!m) return {status: r.status, crumbs: null};
-    const list = JSON.parse(m[1]);
-    return {status: r.status, crumbs: list.map(x => ({name: x.name || '', item: x.item || ''}))};
-  } catch (e) {
-    return {status: 0, crumbs: null, error: String(e)};
-  }
-}
-"""
+# 哪些檢查點要順便提前抓「下一檔」的開檔資料
+PRECAPTURE_AT = ("open", "close")
+
+FIELDNAMES = ["icode","brand","name","discount","old_price","price","qty","scraped_at","source","qty_pre"]
+
+# 開檔後 3 分鐘的數量比提前抓少於這個比例，就改用開檔後的數字
+PRE_DROP_RATIO = 0.5
+PRE_DROP_MIN_QTY = 100   # 提前抓數量太小（<100）時差異不具意義，不處理
+
+SLOTS = [
+    (0,  7,  "0000"),
+    (7,  11, "0700"),
+    (11, 14, "1100"),
+    (14, 18, "1400"),
+    (18, 22, "1800"),
+    (22, 24, "2200"),
+]
 
 
-def clean(text: str) -> str:
-    """分類名稱裡的半形逗號換成全形，避免打亂 CSV 欄位"""
-    return (text or "").strip().replace(",", "，")
+def get_current_slot() -> str:
+    now_hour = datetime.now(TW_TZ).hour
+    for start, end, slot in SLOTS:
+        if start <= now_hour < end:
+            return slot
+    return "2200"
 
 
-def parse_crumbs(crumbs):
-    """把麵包屑轉成 (大類, 大類代碼, 中類, 中類代碼)；資料不足回傳 None"""
-    if not crumbs or len(crumbs) < 2:
+def next_slot_of(slot_code: str, date_str: str):
+    """回傳下一檔的 (時段代碼, 日期)。22:00 的下一檔是隔天的 00:00"""
+    codes = [s[2] for s in SLOTS]
+    idx = codes.index(slot_code)
+    if idx + 1 < len(codes):
+        return codes[idx + 1], date_str
+    next_day = datetime.strptime(date_str, "%Y%m%d") + timedelta(days=1)
+    return codes[0], next_day.strftime("%Y%m%d")
+
+
+def find_block(mentals, slot_code: str):
+    """用區塊上的時段文字（例如「本檔時段 14:00 開搶」）找出指定時段的區塊"""
+    label = f"{slot_code[:2]}:{slot_code[2:]}"
+    for div in mentals:
+        try:
+            el = div.query_selector(".time")
+            text = el.inner_text() if el else ""
+        except Exception:
+            text = ""
+        if label in text:
+            return div
+    return None
+
+
+def snapshot_path(date_str: str, slot_code: str, checkpoint: str) -> str:
+    return os.path.join(OUTPUT_DIR, f"momo_{date_str}_{slot_code}_{checkpoint}.csv")
+
+
+def load_snapshot_rows(filepath: str) -> list:
+    if not os.path.exists(filepath):
+        return []
+    with open(filepath, encoding="utf-8-sig") as f:
+        return [r for r in csv.DictReader(f) if r.get("icode")]
+
+
+def qty_missing(value) -> bool:
+    """數量是空白或 0，視為需要補抓"""
+    text = str(value).strip() if value is not None else ""
+    return text == "" or text == "0"
+
+
+def to_int(value):
+    try:
+        return int(str(value).strip())
+    except (ValueError, TypeError):
         return None
 
-    def code_of(item):
-        m = re.search(r"_code=(\d+)", item or "")
-        return m.group(1) if m else ""
 
-    l1, l2 = crumbs[0], crumbs[1]
-    if not l1.get("name") or not l2.get("name"):
-        return None
-    return (clean(l1["name"]), code_of(l1.get("item")),
-            clean(l2["name"]), code_of(l2.get("item")))
+def merge_open(pre_rows: list, fresh: list):
+    """提前抓的資料為主。
+    - 提前抓數量是 0/空白 → 用開檔後的數字補上
+    - 開檔後數量比提前抓少一半以上（且提前抓 >= PRE_DROP_MIN_QTY）→ 改用開檔後數字，
+      提前抓的數字存到 qty_pre（可能是口徑不同，也可能是真的開搶秒殺，由前端標示）
+    - 其餘維持提前抓；開檔後數量為 0（開檔瞬間賣完）也維持提前抓"""
+    fresh_map = {p["icode"]: p for p in fresh}
+    merged, filled, switched, added = [], 0, 0, 0
+    seen = set()
+    for row in pre_rows:
+        icode = row["icode"]
+        seen.add(icode)
+        f = fresh_map.get(icode)
+        pre_q, new_q = to_int(row.get("qty")), (to_int(f.get("qty")) if f else None)
+        if qty_missing(row.get("qty")) and f is not None and not qty_missing(f.get("qty")):
+            merged.append(f)
+            filled += 1
+        elif (f is not None and pre_q is not None and new_q is not None
+              and new_q > 0 and pre_q >= PRE_DROP_MIN_QTY and new_q < pre_q * PRE_DROP_RATIO):
+            f = dict(f)
+            f["qty_pre"] = pre_q
+            merged.append(f)
+            switched += 1
+        else:
+            row.setdefault("source", "pre")
+            merged.append(row)
+    for p in fresh:
+        if p["icode"] not in seen:
+            merged.append(p)
+            added += 1
+    return merged, filled, switched, added
 
 
-def load_categories() -> dict:
-    cats = {}
-    if os.path.exists(CATEGORIES_FILE):
-        with open(CATEGORIES_FILE, encoding="utf-8-sig") as f:
-            for row in csv.DictReader(f):
-                if row.get("icode") and row.get("cat_l1"):
-                    cats[row["icode"]] = row
-    return cats
-
-
-def save_categories(cats: dict):
+def log_failure(date_str: str, slot_code: str, checkpoint: str, reason: str):
+    """把抓取失敗事件記錄到 snapshots/scrape_failures.csv，方便之後離線查看"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
-    tmp = CATEGORIES_FILE + ".tmp"
-    with open(tmp, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=CAT_FIELDS, extrasaction="ignore")
+    file_exists = os.path.exists(FAILURE_LOG)
+    now = datetime.now(TW_TZ)
+    with open(FAILURE_LOG, "a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(["timestamp", "date", "slot", "checkpoint", "reason"])
+        writer.writerow([now.strftime("%Y-%m-%d %H:%M:%S"), date_str, slot_code, checkpoint, reason])
+    print(f"  📝 已記錄失敗事件 → {FAILURE_LOG}（原因：{reason}）")
+
+
+def parse_items(items, scraped_at: str, source: str = "open") -> list:
+    products = []
+    for li in items:
+        try:
+            a_tag = li.query_selector("a[href]")
+            href  = a_tag.get_attribute("href") if a_tag else ""
+            m     = re.search(r"i_code=(\d+)", href or "")
+            icode = m.group(1) if m else None
+            if not icode:
+                continue
+
+            def get_txt(sel):
+                el = li.query_selector(sel)
+                return el.inner_text().strip() if el else ""
+
+            # 「倒數：1,951組」要先拿掉千分位逗號再取數字
+            qty_match = re.search(r"(\d+)", get_txt(".last").replace(",", "").replace("，", ""))
+            qty       = int(qty_match.group(1)) if qty_match else None
+
+            old_price = get_txt(".oldPrice")
+            price     = get_txt(".price")
+
+            products.append({
+                "icode":      icode,
+                "brand":      get_txt(".brand"),
+                "name":       get_txt(".brand2"),
+                "discount":   get_txt(".discount"),
+                "old_price":  re.sub(r"[^\d]", "", old_price) or None,
+                "price":      re.sub(r"[^\d]", "", price)     or None,
+                "qty":        qty,
+                "scraped_at": scraped_at,
+                "source":     source,
+            })
+        except Exception as e:
+            print(f"  ⚠️ 跳過商品：{e}")
+
+    seen = {}
+    for p in products:
+        seen[p["icode"]] = p
+    return list(seen.values())
+
+
+def save_csv(products: list, date_str: str, slot_code: str, checkpoint: str, time_text: str):
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    filename = f"momo_{date_str}_{slot_code}_{checkpoint}.csv"
+    filepath = os.path.join(OUTPUT_DIR, filename)
+
+    with open(filepath, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=FIELDNAMES, extrasaction="ignore")
         writer.writeheader()
-        for icode in sorted(cats, key=lambda x: int(x) if x.isdigit() else 0):
-            writer.writerow(cats[icode])
-    os.replace(tmp, CATEGORIES_FILE)
+        writer.writerows(products)
+
+    print(f"  ✅ {checkpoint.upper()} → {filename}（{len(products)} 個商品）{time_text}")
+    return filepath
 
 
-def load_fail_counts() -> dict:
-    counts = {}
-    if os.path.exists(FAILURES_FILE):
-        with open(FAILURES_FILE, encoding="utf-8-sig") as f:
-            for row in csv.DictReader(f):
-                if row.get("icode"):
-                    counts[row["icode"]] = counts.get(row["icode"], 0) + 1
-    return counts
-
-
-def log_failure(icode: str, reason: str):
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    exists = os.path.exists(FAILURES_FILE)
-    with open(FAILURES_FILE, "a", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=FAIL_FIELDS)
-        if not exists:
-            writer.writeheader()
-        writer.writerow({
-            "timestamp": datetime.now(TW_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-            "icode": icode, "reason": reason,
-        })
-
-
-def current_slot_products() -> dict:
-    """讀最新 3 份開檔快照（當檔 + 已提前抓的下一檔），回傳 {品號: 品名}"""
-    opens = sorted(glob(os.path.join(OUTPUT_DIR, "momo_*_open.csv")))[-3:]
-    products = {}
-    for path in reversed(opens):
-        with open(path, encoding="utf-8-sig") as f:
-            for row in csv.DictReader(f):
-                if row.get("icode") and row["icode"] not in products:
-                    products[row["icode"]] = f"{row.get('brand', '')} {row.get('name', '')}".strip()
-    if opens:
-        print(f"📂 開檔快照：{'、'.join(os.path.basename(o) for o in opens)}（共 {len(products)} 個商品）")
-    return products
-
-
-def history_products() -> dict:
-    """歷史資料裡的商品，新的排前面，回傳 {品號: 品名}"""
-    products = {}
-    if not os.path.exists(ALL_RESULTS):
-        return products
-    with open(ALL_RESULTS, encoding="utf-8-sig") as f:
-        rows = list(csv.DictReader(f))
-    for row in reversed(rows):
-        icode = row.get("icode")
-        if icode and icode not in products:
-            products[icode] = f"{row.get('brand', '')} {row.get('name', '')}".strip()
-    return products
-
-
-def build_todo(cats: dict, fail_counts: dict, backfill: int) -> list:
-    """決定這次要查哪些品號：當檔新商品優先，再加少量歷史補抓"""
-    def needed(icode):
-        return icode not in cats and fail_counts.get(icode, 0) < MAX_FAIL_RUNS
-
-    todo = [(i, n) for i, n in current_slot_products().items() if needed(i)]
-    new_count = len(todo)
-    picked = {i for i, _ in todo}
-
-    backlog = [(i, n) for i, n in history_products().items()
-               if needed(i) and i not in picked]
-    todo += backlog[:max(backfill, 0)]
-    todo = todo[:MAX_PER_RUN]
-
-    print(f"🔍 當檔新商品 {new_count} 個、歷史待補 {len(backlog)} 個 → 這次查 {len(todo)} 個")
-    return todo
-
-
-def fetch_one(page, icode: str):
-    """查一個品號，含重試。回傳 (分類tuple或None, 失敗原因)"""
-    reason = ""
-    for attempt in range(len(RETRY_WAITS_SEC) + 1):
-        if attempt > 0:
-            time.sleep(RETRY_WAITS_SEC[attempt - 1])
+def goto_with_retry(page, url: str):
+    """帶重試機制的頁面載入，應對開檔瞬間流量尖峰造成的逾時"""
+    last_error = None
+    for attempt in range(1, MAX_RETRIES + 2):
         try:
-            res = page.evaluate(FETCH_JS, icode)
+            page.goto(url, wait_until="domcontentloaded", timeout=GOTO_TIMEOUT_MS)
+            return True, None
         except Exception as e:
-            reason = f"執行失敗:{type(e).__name__}"
-            continue
-        parsed = parse_crumbs(res.get("crumbs"))
-        if parsed:
-            return parsed, ""
-        reason = f"無分類資料(http {res.get('status')})"
-        if res.get("status") in (403, 429):
-            # 被擋了就不要再硬試，直接結束這個品號
-            return None, f"被拒絕(http {res.get('status')})"
-    return None, reason
-
-
-def run(backfill: int):
-    cats = load_categories()
-    fail_counts = load_fail_counts()
-    todo = build_todo(cats, fail_counts, backfill)
-    if not todo:
-        print("📋 沒有需要抓分類的商品")
-        return
-
-    from playwright.sync_api import sync_playwright
-    import proxy_config
-
-    ok_count, fail_count, blocked = 0, 0, 0
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True, **proxy_config.launch_args())
-        page = browser.new_page(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            )
-        )
-        proxy_config.apply_light_mode(page)
-        try:
-            page.goto(MOMO_URL, wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(3000)
-        except Exception as e:
-            print(f"❌ momo 頁面載入失敗，這次先不抓分類（{type(e).__name__}）")
-            browser.close()
-            return
-
-        for idx, (icode, name) in enumerate(todo, 1):
-            parsed, reason = fetch_one(page, icode)
-            if parsed:
-                l1, l1c, l2, l2c = parsed
-                cats[icode] = {
-                    "icode": icode, "cat_l1": l1, "cat_l1_code": l1c,
-                    "cat_l2": l2, "cat_l2_code": l2c,
-                    "updated_at": datetime.now(TW_TZ).strftime("%Y-%m-%d %H:%M:%S"),
-                    "product_name": name,
-                }
-                ok_count += 1
-                blocked = 0
-                print(f"  [{idx}/{len(todo)}] ✅ {name[:20]} → {l1} / {l2}")
+            last_error = type(e).__name__
+            if attempt <= MAX_RETRIES:
+                print(f"  ⚠️ 第{attempt}次頁面載入失敗，{RETRY_WAIT_MS//1000}秒後重試...（{last_error}）")
+                page.wait_for_timeout(RETRY_WAIT_MS)
             else:
-                fail_count += 1
-                log_failure(icode, reason)
-                print(f"  [{idx}/{len(todo)}] ⚠️ {name[:20]} → {reason}")
-                if reason.startswith("被拒絕"):
-                    blocked += 1
-                    if blocked >= 3:
-                        print("  🛑 連續 3 筆被 momo 拒絕，提早結束，下一檔再試")
-                        break
+                print(f"  ❌ 頁面載入失敗，已重試{MAX_RETRIES}次仍無法載入，放棄本次抓取（{last_error}）")
+    return False, last_error
 
-            if idx % 10 == 0:
-                save_categories(cats)   # 每 10 筆存一次，中途當掉也不會白抓
-            time.sleep(random.uniform(WAIT_MIN_SEC, WAIT_MAX_SEC))
 
-        browser.close()
+def run(checkpoint: str):
+    now        = datetime.now(TW_TZ)
+    scraped_at = now.strftime("%Y-%m-%d %H:%M:%S")
+    date_str   = now.strftime("%Y%m%d")   # 一開始就固定，全流程共用，避免跨午夜錯位
+    cur_slot   = get_current_slot()
 
-    save_categories(cats)
-    print(f"\n✅ 完成：成功 {ok_count}、失敗 {fail_count}，對照表共 {len(cats)} 個品號 → {CATEGORIES_FILE}")
+    print(f"\n🚀 開始抓取（台灣時間 {now.strftime('%H:%M')}，checkpoint={checkpoint}）")
+    print(f"   當前時段：{cur_slot}")
+
+    products  = []
+    time_text = ""
+    next_products = []
+    next_slot, next_date = next_slot_of(cur_slot, date_str)
+
+    try:
+        with sync_playwright() as p:
+            browser, page = proxy_config.open_page(p)
+
+            print(f"  開啟頁面：{MOMO_URL}")
+            ok, err_reason = goto_with_retry(page, MOMO_URL)
+
+            if not ok:
+                log_failure(date_str, cur_slot, checkpoint, f"page_goto_failed:{err_reason}")
+            else:
+                try:
+                    page.wait_for_selector("#CustExclbuy div.MENTAL", timeout=15000)
+                except Exception:
+                    print("  ⚠️ 等待頁面逾時，繼續嘗試...")
+                page.wait_for_timeout(3000)
+
+                # 抓取所有 .MENTAL 區塊；先用時段文字找當前時段，找不到才用第1個
+                mentals = page.query_selector_all("#CustExclbuy div.MENTAL")
+
+                if len(mentals) >= 1:
+                    cur_div     = find_block(mentals, cur_slot) or mentals[0]
+                    time_el_cur = cur_div.query_selector(".time")
+                    time_text   = time_el_cur.inner_text().strip() if time_el_cur else ""
+                    items       = cur_div.query_selector_all("li.box1")
+                    products    = parse_items(items, scraped_at)
+                    if len(products) == 0:
+                        log_failure(date_str, cur_slot, checkpoint, "mentals_found_but_zero_products")
+                else:
+                    print("  ⚠️ 找不到當前時段區塊")
+                    log_failure(date_str, cur_slot, checkpoint, "no_mentals_found")
+
+                # 順便提前抓「下一檔」的開檔資料
+                if checkpoint in PRECAPTURE_AT:
+                    next_div = find_block(mentals, next_slot)
+                    if next_div is not None:
+                        next_products = parse_items(next_div.query_selector_all("li.box1"), scraped_at, source="pre")
+
+            browser.close()
+
+    except Exception as e:
+        print(f"  ❌ 發生預期外錯誤：{type(e).__name__}: {e}")
+        log_failure(date_str, cur_slot, checkpoint, f"unexpected_error:{type(e).__name__}")
+
+    print()
+    if checkpoint == "open":
+        # 開檔：若已有提前抓的資料，只補數量為 0/空白與新出現的商品
+        pre_rows = load_snapshot_rows(snapshot_path(date_str, cur_slot, "open"))
+        if pre_rows:
+            merged, filled, switched, added = merge_open(pre_rows, products)
+            print(f"  📦 已有提前抓的開檔資料 {len(pre_rows)} 個商品 → 補抓數量 {filled} 個、"
+                  f"數量驟降改用開檔後數字 {switched} 個、新增商品 {added} 個")
+            save_csv(merged, date_str, cur_slot, checkpoint, f"  ← {time_text}")
+        else:
+            print("  📦 沒有提前抓的開檔資料，改用這次抓到的整檔資料")
+            save_csv(products, date_str, cur_slot, checkpoint, f"  ← {time_text}")
+    else:
+        save_csv(products, date_str, cur_slot, checkpoint, f"  ← {time_text}")
+
+    # 存下一檔的提前開檔資料（已經有開檔後資料的檔案不覆蓋；抓不到就保留舊的）
+    if checkpoint in PRECAPTURE_AT:
+        next_path = snapshot_path(next_date, next_slot, "open")
+        existing = load_snapshot_rows(next_path)
+        if not next_products:
+            print(f"  ⏭️ 頁面上還沒有下一檔（{next_slot}）的資料，開檔後再抓")
+        elif any(r.get("source") == "open" for r in existing):
+            print(f"  ⏭️ 下一檔（{next_slot}）已有開檔後資料，不覆蓋")
+        else:
+            print(f"  🔮 提前抓下一檔（{next_slot}）開檔資料：")
+            save_csv(next_products, next_date, next_slot, "open", "")
+
+    return cur_slot
 
 
 if __name__ == "__main__":
-    run(0 if "--no-backfill" in sys.argv else BACKFILL_PER_RUN)
+    checkpoint = sys.argv[1] if len(sys.argv) > 1 else "close"
+    if checkpoint not in VALID_CHECKPOINTS:
+        print(f"❌ 無效的 checkpoint 參數：{checkpoint}（必須是 open / mid / close）")
+        sys.exit(1)
+    run(checkpoint)
