@@ -205,6 +205,11 @@ if __name__ == "__main__":
     slot_label = SLOT_LABELS.get(slot_code, slot_code)
     display_date = f"{date_str[:4]}/{date_str[4:6]}/{date_str[6:]}"
 
+    # 結尾快照沒有任何商品 = 當次抓取失敗（被擋、頁面異常等）。此時算出來的「全部售完」是假的，不寫入
+    if len(load_snapshot(close_file)) == 0:
+        print(f"⚠️ 結尾快照是空的（{os.path.basename(close_file)}），本檔期不計算、不寫入成效資料")
+        sys.exit(0)
+
     results = compare(open_file, mid_file, close_file)
     append_to_all_results(results, display_date, slot_label)
 
