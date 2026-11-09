@@ -274,7 +274,13 @@ async function loadAlerts(dates) {
     const res = await fetch(CSV_URL.replace('all_results.csv', 'data_alerts.csv') + '?t=' + Date.now());
     if (!res.ok) return;
     const rows = parseQuotedCSV(await res.text());
-    const recent = new Set(dates.slice(-3));
+    // 以「今天（台灣時間）」與最後資料日取較晚者往前 3 天；整天抓不到資料的日子也要顯示
+    const twToday = new Date(Date.now() + (new Date().getTimezoneOffset() + 480) * 60000);
+    const lastData = dates.length ? dates[dates.length - 1] : '';
+    const fmt = dt => `${dt.getFullYear()}/${String(dt.getMonth() + 1).padStart(2, '0')}/${String(dt.getDate()).padStart(2, '0')}`;
+    let endStr = fmt(twToday); if (lastData > endStr) endStr = lastData;
+    const [ey, em, ed] = endStr.split('/').map(Number);
+    const recent = new Set([0, 1, 2].map(i => fmt(new Date(ey, em - 1, ed - i))));
     const list = rows.filter(a => recent.has(a.date) && a.severity !== '低');
     if (!list.length) return;
     const esc = t => String(t || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
