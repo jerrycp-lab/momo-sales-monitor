@@ -202,6 +202,7 @@ th[data-formula]:last-child:hover::after,th[data-formula]:nth-last-child(2):hove
   </div>
 </div>
 
+<script src="datepicker.js?v=1"></script>
 <script>
 // ── 設定：你的 GitHub 帳號和 repo 名稱 ──
 const GITHUB_USER = 'jerrycp-lab';
@@ -261,6 +262,15 @@ async function loadData() {
 
     const startInput = document.getElementById('startDate');
     const endInput = document.getElementById('endDate');
+    // 日期顏色：正黑＝資料完整，淡灰＝無資料或有檔期缺漏（缺漏檔期本來就不在統計內）
+    MomoDates.attach(startInput);
+    MomoDates.attach(endInput);
+    MomoDates.build(allData, []);
+    // 只用來標示哪些檔期「僅有商品明細」；這些資料不進入任何分析
+    fetch(CSV_URL.replace('all_results.csv', 'listing_only.csv') + '?t=' + Date.now())
+      .then(r => r.ok ? r.text() : '')
+      .then(t => { if (t) MomoDates.build(allData, t.replace(/^\uFEFF/, '').split(/\r?\n/).slice(1).map(l => { const v = l.split(','); return { date: v[0], slot: v[1] }; })); })
+      .catch(() => {});
     startInput.max = endInput.max = fmtLocalDate(new Date());
     applyQuickRange(7);
     document.querySelectorAll('#quickBtns .quick-btn').forEach((b, i) => b.classList.toggle('active', i === 0));
