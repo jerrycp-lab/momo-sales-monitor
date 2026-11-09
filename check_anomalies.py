@@ -50,6 +50,14 @@ def main():
         day_rev[r["date"]] += (s or 0) * (p or 0)
         slot_cnt[(r["date"], r["slot"])] += 1
 
+    last_close = {}          # icode -> (date, slot, 結尾庫存)，依時間順序往後更新
+    prev_close_at = {}       # (date, slot, icode) -> 該品號「更早一檔」的結尾庫存
+    for r in sorted(rows, key=lambda x: (x["date"], x["slot"])):
+        k = (r["date"], r["slot"], r["icode"])
+        if r["icode"] in last_close: prev_close_at[k] = last_close[r["icode"]]
+        c = num(r["qty_close"])
+        if c is not None: last_close[r["icode"]] = c
+
     alerts = []
     def add(r, typ, sev, detail):
         alerts.append({"date": r["date"], "slot": r["slot"], "type": typ, "severity": sev,
@@ -64,7 +72,13 @@ def main():
         if flag in ("calc", "doubt"): continue   # 已知舊版漏位數，不重複告警
         rev = (s or 0) * p
         if day_rev[r["date"]] and rev >= SHARE_MIN_REV and rev / day_rev[r["date"]] > SHARE_LIMIT:
-            add(r, "單列營收過大", "高", f"營收 ${rev:,.0f} 占當日 {rev / day_rev[r['date']]:.0%}")
+            pc0 = prev_close_at.get((r["date"], r["slot"], r["icode"]))
+            consistent = pc0 and o and abs(o - pc0) <= max(0.05 * pc0, 10)
+            share = f"營收 ${rev:.0f} 占當日 {rev / day_rev[r['date']]:.0%}"
+            if consistent:   # 開檔與該品上次結尾相符 → 庫存是真的，只是金額大，降為提醒
+                add(r, "單列營收過大", "低", share + f"（開檔 {o:.0f} 與上次結尾 {pc0:.0f} 相符，應屬真實）")
+            else:
+                add(r, "單列營收過大", "高", share)
         ps = prev_slot.get((r["date"], r["slot"]))
         if ps and o and m is not None and o >= 200 and m <= 0.2 * o:
             pc = close_of.get((ps[0], ps[1], r["icode"]))
