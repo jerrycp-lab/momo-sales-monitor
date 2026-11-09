@@ -205,10 +205,11 @@ def run(backfill: int):
         return
 
     from playwright.sync_api import sync_playwright
+    import proxy_config
 
     ok_count, fail_count, blocked = 0, 0, 0
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(headless=True, **proxy_config.launch_args())
         page = browser.new_page(
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -216,6 +217,7 @@ def run(backfill: int):
                 "Chrome/124.0.0.0 Safari/537.36"
             )
         )
+        proxy_config.apply_light_mode(page)
         try:
             page.goto(MOMO_URL, wait_until="domcontentloaded", timeout=45000)
             page.wait_for_timeout(3000)
