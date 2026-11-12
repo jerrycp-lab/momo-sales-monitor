@@ -719,8 +719,26 @@ function updateHistorySearchResults(data) {
     (m.icode || '').includes(q)
   ).sort((a, b) => b.totalSold - a.totalSold).slice(0, 10);
 
+  // 2026-11-12 修正：選中的商品不在這次搜尋結果裡，就清掉下方的履歷，避免顯示上一次查詢的商品
+  if (historySelectedIcode && !matches.some(m => m.icode === historySelectedIcode)) {
+    historySelectedIcode = null;
+    const detailEl = document.getElementById('historyDetail');
+    if (detailEl) detailEl.innerHTML = '';
+  }
+
   if (matches.length === 0) {
-    resultsEl.innerHTML = '<div style="color:var(--text-dim);font-size:12px">期間內查無符合的商品</div>';
+    // 期間內沒有，查全部資料，告訴使用者最近一次上架是哪天
+    const hits = allData.filter(r =>
+      (r.icode || '').includes(q) || (r.name || '').toLowerCase().includes(q) || (r.brand || '').toLowerCase().includes(q));
+    let hint = '期間內查無符合的商品';
+    if (hits.length) {
+      const last = hits.reduce((a, b) => (a.date + a.slot > b.date + b.slot ? a : b));
+      const n = new Set(hits.map(r => r.icode)).size;
+      hint += `；全部資料中有 ${n} 個符合的商品，最近一次上架是 <b>${last.date} ${last.slot}</b>（${last.name}・品號 ${last.icode}），請把期間往前調整`;
+    } else {
+      hint += '；全部資料（自 2026/08/10 起）也沒有這個商品的上架紀錄';
+    }
+    resultsEl.innerHTML = `<div style="color:var(--text-dim);font-size:12px;line-height:1.7">${hint}</div>`;
     return;
   }
   resultsEl.innerHTML = matches.map(m => `
