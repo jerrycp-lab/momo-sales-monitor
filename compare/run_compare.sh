@@ -8,6 +8,9 @@ echo "===== $(date) [compare:$PLATFORM] ====="
 
 python3 compare/${PLATFORM}_scraper.py
 
+# 第二階段：品牌／品項比對，產生撞品清單（失敗不影響抓取資料）
+python3 compare/build_matches.py || echo "⚠️ 撞品比對失敗，略過"
+
 git add compare/data/
 git commit -m "auto: $(date '+%Y-%m-%d %H:%M') [compare:$PLATFORM] 資料更新" || echo "沒有新資料"
 git pull origin main --no-edit
