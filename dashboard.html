@@ -67,6 +67,14 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans TC',sans-seri
 .slot-chip.pending{color:var(--text-dim);background:#f8fafc;}
 .slot-chip.gap{color:#b8bec7;background:#f8fafc;text-decoration:line-through;}
 .slot-chip.listing{color:#64748b;background:#e2e8f0;}
+.slot-chip.live{color:#fff;background:var(--blue);border-color:var(--blue);}
+.slot-chip.next{color:var(--blue);background:var(--blue-lt);border-color:#93c5fd;border-style:dashed;}
+tr.live-row td{background:#f5f9ff;}
+tr.next-row td{background:#fafbff;}
+tr.sec-row td{font-size:12px;font-weight:700;padding:8px 12px;}
+.live-tag{font-size:11px;font-weight:700;color:#fff;background:var(--blue);padding:2px 7px;border-radius:5px;white-space:nowrap;}
+.next-tag{font-size:11px;font-weight:700;color:var(--blue);background:var(--blue-lt);padding:2px 7px;border-radius:5px;white-space:nowrap;}
+.est-num{color:#60a5fa;font-weight:700;}
 tr.listing-row td{background:#f8fafc;color:#64748b;}
 .listing-tag{font-size:11px;font-weight:700;color:#64748b;background:#e2e8f0;padding:2px 7px;border-radius:5px;white-space:nowrap;}
 .slot-dot{width:5px;height:5px;border-radius:50%;background:currentColor;}
@@ -178,6 +186,7 @@ tbody td{padding:9px 14px;vertical-align:middle;}
   </div>
 
   <div id="alertBanner" style="display:none;background:#fef2f2;color:#991b1b;padding:10px 16px;border-radius:var(--radius);margin-bottom:12px;font-size:12px;line-height:1.7"></div>
+  <div id="liveNotice" style="display:none;background:var(--blue-lt);color:#1e40af;padding:10px 16px;border-radius:var(--radius);margin-bottom:12px;font-size:12px;line-height:1.7"></div>
   <div id="gapNotice" style="display:none;background:#f1f5f9;color:#475569;padding:10px 16px;border-radius:var(--radius);margin-bottom:12px;font-size:12px;line-height:1.7"></div>
   <div id="flagNotice" style="display:none;background:#fff7ed;color:#9a3412;padding:10px 16px;border-radius:var(--radius);margin-bottom:16px;font-size:12px"></div>
   <div id="errorMsg" class="error-msg" style="display:none"></div>
@@ -250,6 +259,9 @@ const CSV_URL = `https://raw.githubusercontent.com/${GITHUB_USER}/${GITHUB_REPO}
 let allData = [];
 let listingData = [];   // 抓取中斷檔期的商品明細（listing_only.csv），只供查詢，不計入任何統計
 let curSlot = 'all';
+let liveRows = [];      // 尚未結算的檔期（進行中／即將開賣），直接讀快照檔，不計入任何統計
+let liveInfo = [];      // [{date, slot, kind, n, time}]
+const liveCache = {};   // 快照檔快取：檔名 -> {t, rows}
 
 // 頁面載入時自動讀取資料
 window.addEventListener('load', loadData);
@@ -328,9 +340,9 @@ async function loadData() {
     const dates = [...new Set(allData.map(r => r.date))].sort();
     const latestDate = dates[dates.length - 1];
     const dateInput = document.getElementById('queryDate');
-    if (latestDate) {
-      dateInput.value = latestDate.replace(/\//g, '-');
-    }
+    // 預設顯示今天（台北時間），進行中與即將開賣的檔期也看得到
+    if (!dateInput.value) dateInput.value = todayTW().replace(/\//g, '-');
+    await loadLive(true);
     dateInput.max = new Date().toISOString().split('T')[0];
 
     document.getElementById('lastUpdate').textContent = '最後載入：' + new Date().toLocaleTimeString('zh-TW');
@@ -424,7 +436,76 @@ function selectSlot(slot, btn) {
   renderAll();
 }
 
-function filterData() { renderAll(); }
+async function filterData() { await loadLive(); renderAll(); }
+
+// ── 尚未結算檔期：讀 GitHub 上的快照檔（開檔／中段／結尾） ──
+const SNAP_BASE = CSV_URL.replace('all_results.csv', '');
+const SLOT_START = {'00:00':0,'07:00':7,'11:00':11,'14:00':14,'18:00':18,'22:00':22};
+function nowTW() {   // 不管瀏覽器在哪個時區，都用台北時間
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Taipei', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', hourCycle:'h23'})
+    .formatToParts(new Date()).map(x => [x.type, x.value]));
+  return { date: `${p.year}/${p.month}/${p.day}`, mins: parseInt(p.hour) * 60 + parseInt(p.minute) };
+}
+function todayTW() { return nowTW().date; }
+function addDays(dateStr, n) {
+  const [y, m, d] = dateStr.split('/').map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  return `${dt.getFullYear()}/${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')}`;
+}
+async function fetchSnap(date, slot, cp, force) {
+  const name = `momo_${date.replace(/\//g,'')}_${slot.replace(':','')}_${cp}.csv`;
+  const c = liveCache[name];
+  if (c && !force && Date.now() - c.t < 120000) return c.rows;
+  let rows = [];
+  try {
+    const res = await fetch(SNAP_BASE + name + '?t=' + Date.now());
+    if (res.ok) rows = parseQuotedCSV(await res.text()).filter(r => r.icode);
+  } catch (e) { /* 檔案不存在 = 這個抓取點還沒跑 */ }
+  liveCache[name] = { t: Date.now(), rows };
+  return rows;
+}
+async function loadLive(force) {
+  const dateVal = document.getElementById('queryDate').value.replace(/-/g, '/');
+  const now = nowTW();
+  liveRows = []; liveInfo = [];
+  if (dateVal !== now.date) return;   // 只有「今天」會有尚未結算的檔期
+  const done = new Set(allData.filter(r => r.date === dateVal).map(r => r.slot));
+  const listed = new Set(listingData.filter(r => r.date === dateVal).map(r => r.slot));
+  const targets = SLOT_SEQ.filter(s => !done.has(s) && !listed.has(s)).map(s => ({ date: dateVal, slot: s }));
+  targets.push({ date: addDays(dateVal, 1), slot: '00:00', tomorrow: true });   // 22:03 起會預抓隔天 00:00
+  await Promise.all(targets.map(async t => {
+    const [op, mid, cl] = await Promise.all(['open', 'mid', 'close'].map(cp => fetchSnap(t.date, t.slot, cp, force)));
+    if (!op.length && !mid.length && !cl.length) return;
+    const kind = (t.tomorrow || now.mins < SLOT_START[t.slot] * 60) ? 'next' : 'live';
+    const M = {}, C = {};
+    mid.forEach(r => M[r.icode] = r); cl.forEach(r => C[r.icode] = r);
+    const order = [...new Set([...op, ...mid, ...cl].map(r => r.icode))];
+    const O = {}; op.forEach(r => O[r.icode] = r);
+    const num = v => { const n = parseInt(String(v || '').replace(/,/g, '')); return isNaN(n) ? null : n; };
+    order.forEach(ic => {
+      const b = O[ic] || M[ic] || C[ic];
+      const qo = O[ic] ? num(O[ic].qty) : null, qm = M[ic] ? num(M[ic].qty) : null, qc = C[ic] ? num(C[ic].qty) : null;
+      const latest = qc !== null ? qc : qm;
+      const sold = (kind === 'live' && qo !== null && latest !== null && qo >= latest) ? qo - latest : null;
+      liveRows.push({
+        _kind: kind, _tomorrow: !!t.tomorrow, date: t.date, slot: t.slot, icode: ic,
+        brand: b.brand, name: b.name, discount: b.discount, old_price: b.old_price, price: b.price,
+        qty_open: qo, mid_qty: qm, qty_close: qc, open_source: O[ic] ? O[ic].source : '',
+        sold, sell_rate: (sold !== null && qo) ? (sold / qo * 100).toFixed(1) : null,
+      });
+    });
+    const tm = [...op, ...mid, ...cl].map(r => r.scraped_at || '').sort().pop() || '';
+    liveInfo.push({ date: t.date, slot: t.slot, kind, tomorrow: !!t.tomorrow, n: order.length, time: tm.slice(11, 16),
+      stage: cl.length ? '結尾' : mid.length ? '中段' : (op.every(r => r.source === 'pre') ? '預抓' : '開檔') });
+  }));
+  liveInfo.sort((a, b) => (a.date + a.slot).localeCompare(b.date + b.slot));
+}
+// 看今天時每 3 分鐘自動更新尚未結算的檔期
+setInterval(async () => {
+  const d = document.getElementById('queryDate');
+  if (!d || d.value.replace(/-/g, '/') !== todayTW() || document.hidden) return;
+  await loadLive(true); renderAll();
+}, 180000);
 
 function getFilteredData() {
   const dateVal = document.getElementById('queryDate').value.replace(/-/g, '/');
@@ -498,10 +579,11 @@ function renderAll() {
   const dateVal = document.getElementById('queryDate').value.replace(/-/g, '/');
   const listRows = listingData.filter(r => r.date === dateVal && (curSlot === 'all' || r.slot === curSlot));
   renderGapNotice(dateVal);
+  renderLiveNotice();
   const dupSet = getDuplicateIcodeSet(dateVal);
   renderStats(data);
   renderSlotBar();
-  renderTable(allRows, dupSet, listRows);
+  renderTable(allRows, dupSet, listRows, liveRows.filter(r => curSlot === 'all' || r.slot === curSlot));
   renderDist(data);
   renderSummary(data);
 }
@@ -515,6 +597,16 @@ function renderGapNotice(dateVal) {
   if (s.missing.length) parts.push(`<b>無資料</b>：${s.missing.join('、')}`);
   if (s.listing.length) parts.push(`<b>僅保留商品明細</b>：${s.listing.join('、')}（品號、價格、數量可查詢；不含售出量、營收，不計入任何統計）`);
   el.innerHTML = `⏸ 此日部分檔期抓取中斷。${parts.join('；')}`;
+  el.style.display = 'block';
+}
+
+function renderLiveNotice() {
+  const el = document.getElementById('liveNotice');
+  if (!liveInfo.length) { el.style.display = 'none'; return; }
+  const parts = liveInfo.map(i => i.kind === 'live'
+    ? `<b>▶ 進行中 ${i.slot}</b>（${i.n} 件，${i.stage} ${i.time}）`
+    : `<b>⏳ 即將開賣 ${i.tomorrow ? '明日 ' : ''}${i.slot}</b>（${i.n} 件，預抓 ${i.time}）`);
+  el.innerHTML = `${parts.join('　')}<br><span style="font-size:11px;color:#3b82f6">尚未結算的檔期：顯示品項、折扣、價格與開賣組數；進行中的「售出」是到最近一次抓取為止的暫估（淡藍字），不計入上方統計。檔期結束前 5 分鐘結算後，自動轉為正式資料。每 3 分鐘自動更新。</span>`;
   el.style.display = 'block';
 }
 
@@ -566,12 +658,18 @@ function renderSlotBar() {
   const chips = slots.map(s => {
     const isDone = doneSlots.includes(s);
     if (isDone) return `<div class="slot-chip done"><div class="slot-dot"></div>${s} ✓</div>`;
+    const li = liveInfo.find(i => i.slot === s && !i.tomorrow);
+    if (li) return li.kind === 'live'
+      ? `<div class="slot-chip live" title="進行中，尚未結算"><div class="slot-dot"></div>${s} 進行中</div>`
+      : `<div class="slot-chip next" title="已預抓，即將開賣"><div class="slot-dot"></div>${s} 即將開賣</div>`;
     if (st.listing.includes(s)) return `<div class="slot-chip listing" title="抓取中斷，僅保留商品明細"><div class="slot-dot"></div>${s} 僅明細</div>`;
     if (st.missing.includes(s)) return `<div class="slot-chip gap" title="抓取中斷，無資料"><div class="slot-dot"></div>${s} 無資料</div>`;
     return `<div class="slot-chip pending"><div class="slot-dot"></div>${s}</div>`;
   }).join('');
+  const tmr = liveInfo.find(i => i.tomorrow);
+  const tchip = tmr ? `<div class="slot-chip next" title="已預抓，即將開賣"><div class="slot-dot"></div>明日 00:00 即將開賣</div>` : '';
   document.getElementById('slotBar').innerHTML =
-    `<span style="font-size:11px;color:var(--text-dim);white-space:nowrap">時段狀態</span>${chips}`;
+    `<span style="font-size:11px;color:var(--text-dim);white-space:nowrap">時段狀態</span>${chips}${tchip}`;
 }
 
 function slotTagClass(slot) {
@@ -579,9 +677,10 @@ function slotTagClass(slot) {
   return map[slot] || 'tag-0700';
 }
 
-function renderTable(data, dupSet, listRows) {
+function renderTable(data, dupSet, listRows, liveList) {
   dupSet = dupSet || new Set();
   listRows = listRows || [];
+  liveList = liveList || [];
   const sorted = [...data].sort((a,b) => (parseInt(b.sold)||0)-(parseInt(a.sold)||0));
   const rows = sorted.map((r, i) => {
     const sold = parseInt(r.sold) || 0;
@@ -625,7 +724,39 @@ const isDup = dupSet.has(r.icode);
       <td><span class="listing-tag">僅明細</span></td>
     </tr>`).join('');
   const sep = (rows && lrows) ? `<tr><td colspan="11" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:6px 12px">以下為抓取中斷檔期的商品明細（不含售出量，不計入統計）</td></tr>` : '';
-  document.getElementById('resultTable').innerHTML = (rows + sep + lrows) || '<tr><td colspan="11" style="text-align:center;color:var(--text-dim);padding:30px">此日期/時段無資料</td></tr>';
+
+  // 尚未結算的檔期：進行中在前、即將開賣在後；同一檔依開賣組數 × 活動價（檔期規模）排序
+  const money = v => parseFloat(String(v || '').replace(/,/g, '')) || 0;
+  let liveHtml = '';
+  const groups = [];
+  liveList.forEach(r => { const k = r.date + r.slot; let g = groups.find(x => x.k === k); if (!g) groups.push(g = { k, kind: r._kind, slot: r.slot, tomorrow: r._tomorrow, rows: [] }); g.rows.push(r); });
+  groups.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'live' ? -1 : 1) || a.k.localeCompare(b.k));
+  groups.forEach(g => {
+    const scale = g.rows.reduce((s, r) => s + money(r.price) * (r.qty_open || r.mid_qty || 0), 0);
+    const head = g.kind === 'live' ? `▶ 進行中：${g.slot} 檔` : `⏳ 即將開賣：${g.tomorrow ? '明日 ' : ''}${g.slot} 檔`;
+    liveHtml += `<tr class="sec-row"><td colspan="11" style="background:${g.kind === 'live' ? 'var(--blue)' : 'var(--blue-lt)'};color:${g.kind === 'live' ? '#fff' : '#1e40af'}">${head}　${g.rows.length} 件　開賣組數 × 活動價 約 $${Math.round(scale).toLocaleString('zh-TW')}</td></tr>`;
+    const gs = [...g.rows].sort((a, b) => money(b.price) * (b.qty_open || b.mid_qty || 0) - money(a.price) * (a.qty_open || a.mid_qty || 0));
+    liveHtml += gs.map((r, i) => {
+      const isDup = dupSet.has(r.icode);
+      const nm = isDup ? `style="color:var(--red);cursor:pointer;text-decoration:underline dotted;" onclick="showHistoryModal('${r.icode}')" title="點擊查看近3日上架紀錄"` : '';
+      const soldOutNow = r._kind === 'live' && r.qty_open && (r.qty_close === 0 || (r.qty_close === null && r.mid_qty === 0));
+      return `<tr class="${r._kind}-row">
+        <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
+        <td><div class="prod-name" ${nm}>${r.name}${isDup ? ' 🔁' : ''}</div><div class="prod-brand">${r.brand} ・ ${icodeLink(r.icode)}</div></td>
+        <td><span class="slot-tag ${slotTagClass(r.slot)}">${r._tomorrow ? '明 ' : ''}${r.slot}</span></td>
+        <td><span class="disc-badge">${r.discount}</span></td>
+        <td style="font-family:'DM Mono',monospace">$${r.price}${r.old_price ? `<div style="font-size:10px;color:var(--text-dim);text-decoration:line-through">$${r.old_price}</div>` : ''}</td>
+        <td class="qty" style="font-weight:700" ${r.open_source === 'pre' ? 'title="開賣前預抓的組數"' : ''}>${r.qty_open !== null ? fmtInt(r.qty_open) : dash}</td>
+        <td class="qty">${r.mid_qty !== null ? fmtInt(r.mid_qty) : dash}</td>
+        <td class="qty">${r.qty_close !== null ? fmtInt(r.qty_close) : dash}</td>
+        <td>${r.sold !== null ? `<span class="est-num" title="暫估：開檔 − 最近一次抓到的庫存">${fmtInt(r.sold)}</span>` : dash}</td>
+        <td>${r.sell_rate !== null ? `<span class="est-num">${r.sell_rate}%</span>` : dash}</td>
+        <td>${r._kind === 'live' ? '<span class="live-tag">進行中</span>' : '<span class="next-tag">即將開賣</span>'}${soldOutNow ? ' <span class="sold-out-tag">🔥 已售完</span>' : ''}</td>
+      </tr>`;
+    }).join('');
+  });
+  const doneHead = (liveHtml && rows) ? `<tr class="sec-row"><td colspan="11" style="background:var(--green-lt);color:var(--green)">✓ 已結算檔期（售出依售出量排序）</td></tr>` : '';
+  document.getElementById('resultTable').innerHTML = (liveHtml + doneHead + rows + sep + lrows) || '<tr><td colspan="11" style="text-align:center;color:var(--text-dim);padding:30px">此日期/時段無資料</td></tr>';
 }
 
 function renderDist(data) {
