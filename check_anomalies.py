@@ -88,6 +88,10 @@ def main():
             pc = close_of.get((ps[0], ps[1], r["icode"]))
             if pc is not None and pc == o:
                 add(r, "開檔疑似沿用上檔庫存", "高", f"開檔 {o:.0f} = 上一檔結尾，中段僅 {m:.0f}")
+        qp = num(r.get("qty_post", ""))
+        if qp is not None and o and qp < o:
+            add(r, "開檔後驟降(可能秒殺)", "低",
+                f"開賣前 {o:.0f} → 開檔後3分鐘 {qp:.0f}（-{(o - qp) / o:.0%}），售出以開賣前數字計算")
         if o is not None and s is not None and s > o:
             add(r, "售出大於開檔", "高", f"開檔 {o:.0f}，售出 {s:.0f}")
         if m is not None and c is not None and not (old and m <= 9) and m > 0 \
