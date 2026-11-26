@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-momo 限時搶購 - 成效計算程式 v5
+momo 限時搶購 - 成效計算程式 v9
+
+v9（2026/11/24）：all_results.csv 新增 qty_post 欄位（開檔後 3 分鐘驟降時的數字），
+  開檔量與售出仍以開賣前預抓數字計算。
 
 v5 修正內容：
   - 配合 momo_scraper.py v7 的三檢查點架構（open / mid / close），
@@ -29,7 +32,7 @@ OUTPUT_DIR  = "snapshots"
 ALL_RESULTS = os.path.join(OUTPUT_DIR, "all_results.csv")
 FIELDNAMES  = ["date","slot","icode","brand","name","discount","price",
                "qty_open","mid_qty","qty_close","sold","sold_out","sell_rate",
-               "open_source","qty_pre","data_flag","raw_values"]
+               "open_source","qty_pre","data_flag","raw_values","qty_post"]
 
 # momo 六個時段
 SLOT_LABELS = {
@@ -112,6 +115,7 @@ def compare(open_file: str, mid_file: str, close_file: str) -> list:
             "sell_rate": rate,
             "open_source": s.get("source", "") or "",
             "qty_pre":   s.get("qty_pre", "") or "",
+            "qty_post":  s.get("qty_post", "") or "",   # v12：開檔後 3 分鐘驟降時的數字（開檔量仍用開賣前預抓）
         })
 
     results.sort(key=lambda r: -(r["sold"] or 0))
@@ -186,6 +190,7 @@ def append_to_all_results(results: list, date_str: str, slot_str: str):
                 "qty_pre":   r.get("qty_pre", ""),
                 "data_flag": "",
                 "raw_values": "",
+                "qty_post":  r.get("qty_post", ""),
             })
 
     print(f"✅ 已追加 {len(results)} 筆 → {ALL_RESULTS}")
