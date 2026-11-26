@@ -1,6 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-momo 限時搶購 - 商品資料抓取程式 v11
+momo 限時搶購 - 商品資料抓取程式 v12
+
+v12 修改內容（2026/11/24）：
+  - 開檔後 3 分鐘驟降「不再改用開檔後數字」：驟降也可能是開賣即被秒殺，
+    改為保留提前抓（開賣前）的數字當開檔量，開檔後 3 分鐘的數字另存在新欄位 qty_post，
+    由儀表板／交叉分析／告警顯示「📉 驟降」提醒（qty_pre 欄位不再寫入）。
 
 v11 新增內容（2026/11）：
   - 修正「提前抓」數字口徑不同的問題：2026/11/01 22:00 魚油，提前抓到 4476
@@ -70,7 +75,7 @@ RETRY_WAIT_MS   = 5000    # 每次重試前等待 5 秒
 # 哪些檢查點要順便提前抓「下一檔」的開檔資料
 PRECAPTURE_AT = ("open", "close")
 
-FIELDNAMES = ["icode","brand","name","discount","old_price","price","qty","scraped_at","source","qty_pre"]
+FIELDNAMES = ["icode","brand","name","discount","old_price","price","qty","scraped_at","source","qty_pre","qty_post"]
 
 # 開檔後 3 分鐘的數量比提前抓少於這個比例，就改用開檔後的數字
 PRE_DROP_RATIO = 0.5
@@ -145,8 +150,8 @@ def to_int(value):
 def merge_open(pre_rows: list, fresh: list):
     """提前抓的資料為主。
     - 提前抓數量是 0/空白 → 用開檔後的數字補上
-    - 開檔後數量比提前抓少一半以上（且提前抓 >= PRE_DROP_MIN_QTY）→ 改用開檔後數字，
-      提前抓的數字存到 qty_pre（可能是口徑不同，也可能是真的開搶秒殺，由前端標示）
+    - 開檔後數量比提前抓少一半以上（且提前抓 >= PRE_DROP_MIN_QTY）→ v12 起「保留提前抓的數字」，
+      開檔後數字存到 qty_post，由前端標示「📉 驟降」（可能是開搶秒殺，也可能是口徑不同）
     - 其餘維持提前抓；開檔後數量為 0（開檔瞬間賣完）也維持提前抓"""
     fresh_map = {p["icode"]: p for p in fresh}
     merged, filled, switched, added = [], 0, 0, 0
@@ -161,9 +166,10 @@ def merge_open(pre_rows: list, fresh: list):
             filled += 1
         elif (f is not None and pre_q is not None and new_q is not None
               and new_q > 0 and pre_q >= PRE_DROP_MIN_QTY and new_q < pre_q * PRE_DROP_RATIO):
-            f = dict(f)
-            f["qty_pre"] = pre_q
-            merged.append(f)
+            row = dict(row)
+            row.setdefault("source", "pre")
+            row["qty_post"] = new_q
+            merged.append(row)
             switched += 1
         else:
             row.setdefault("source", "pre")
@@ -326,7 +332,7 @@ def run(checkpoint: str):
         if pre_rows:
             merged, filled, switched, added = merge_open(pre_rows, products)
             print(f"  📦 已有提前抓的開檔資料 {len(pre_rows)} 個商品 → 補抓數量 {filled} 個、"
-                  f"數量驟降改用開檔後數字 {switched} 個、新增商品 {added} 個")
+                  f"數量驟降（保留開賣前數字、標示提醒）{switched} 個、新增商品 {added} 個")
             save_csv(merged, date_str, cur_slot, checkpoint, f"  ← {time_text}")
         else:
             print("  📦 沒有提前抓的開檔資料，改用這次抓到的整檔資料")
