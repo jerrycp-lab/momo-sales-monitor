@@ -877,12 +877,43 @@ function fmtMoney(v) { return '$' + Math.round(v).toLocaleString('zh-TW'); }
 let catLevel = 'cat1';
 let catSortKey = 'totalSold';
 
+let catExpanded = new Set();   // 2026-11-27 新增：展開看商品的品類（以「層級|名稱」記錄）
+const CAT_PROD_LIMIT = 30;
+
 function selectCatLevel(lv) { catLevel = lv; renderCategory(getFilteredData()); }
+function toggleCatExpand(k) {
+  const id = catLevel + '|' + k;
+  if (catExpanded.has(id)) catExpanded.delete(id); else catExpanded.add(id);
+  renderCategory(getFilteredData());
+}
+
+// 展開列：這個品類底下的商品，依目前排序方式排列，點商品名稱看履歷
+function catProductRows(groupData) {
+  const prods = buildProductSummary(groupData).sort((a, b) => b[catSortKey] - a[catSortKey]);
+  const trs = prods.slice(0, CAT_PROD_LIMIT).map((m, i) => `
+    <tr>
+      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
+      <td><div class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" onclick="gotoHistory('${m.icode}')" title="點擊查看完整履歷">${escHtml(m.name)}</div><div class="prod-brand">${escHtml(m.brand)} ・ ${icodeLink(m.icode)}${catLevel === 'cat1' && m.cat1 !== UNCAT ? ' ・ ' + escHtml(m.cat2) : ''}</div></td>
+      <td class="qty">${m.listings}</td>
+      <td class="qty" style="color:var(--blue);font-weight:700">${m.totalSold}</td>
+      <td class="qty">${m.avgRate.toFixed(1)}%</td>
+      <td class="qty">${m.soldOutCount > 0 ? m.soldOutCount : '<span class="zero">0</span>'}</td>
+      <td class="qty">$${Math.round(m.totalRevenue).toLocaleString('zh-TW')}</td>
+    </tr>`).join('');
+  return `<div style="padding:8px 12px 12px 36px;background:var(--blue-lt)">
+    <table style="background:var(--surface)">
+      <thead><tr><th>#</th><th>商品名稱</th><th>上架次數</th><th>總銷售量</th><th>平均售出率</th><th>售完次數</th><th>期間營收</th></tr></thead>
+      <tbody>${trs}</tbody>
+    </table>
+    ${prods.length > CAT_PROD_LIMIT ? `<div style="padding:6px 4px 0;font-size:11px;color:var(--text-dim)">僅顯示前${CAT_PROD_LIMIT}項（共${prods.length}項），排序依上方按鈕</div>` : ''}
+  </div>`;
+}
 function selectCatSort(key) { catSortKey = key; renderCategory(getFilteredData()); }
 
 function renderCategory(data) {
   const isL1 = catLevel === 'cat1';
-  const summary = aggregateByKey(data, r => isL1 ? r.cat1 : (r.cat1 === UNCAT ? UNCAT : r.cat1 + ' ／ ' + r.cat2));
+  const keyFn = r => isL1 ? r.cat1 : (r.cat1 === UNCAT ? UNCAT : r.cat1 + ' ／ ' + r.cat2);
+  const summary = aggregateByKey(data, keyFn);
   const sorted = [...summary].sort((a, b) => b[catSortKey] - a[catSortKey]);
   const totalSold = summary.reduce((s, g) => s + g.totalSold, 0) || 1;
 
@@ -899,9 +930,12 @@ function renderCategory(data) {
     const clickable = isL1 && s.key !== UNCAT;
     const nameCell = clickable
       ? `<td class="prod-name" style="cursor:pointer;color:var(--blue);text-decoration:underline dotted" title="點擊只看這個大類的中類" onclick="setCatFilter(this.dataset.k)" data-k="${escHtml(s.key)}">${escHtml(s.key)}</td>`
-      : `<td class="prod-name" style="${s.key === UNCAT ? 'color:var(--text-dim)' : ''}">${escHtml(s.key)}</td>`;
+      : `<td class="prod-name" style="cursor:pointer;${s.key === UNCAT ? 'color:var(--text-dim)' : ''}" title="點擊展開／收合商品" onclick="toggleCatExpand(this.dataset.k)" data-k="${escHtml(s.key)}">${escHtml(s.key)}</td>`;
+    const open = catExpanded.has(catLevel + '|' + s.key);
+    const arrow = `<span style="cursor:pointer;color:var(--blue);font-weight:700;padding:0 4px" title="展開／收合這個品類的商品" onclick="toggleCatExpand(this.dataset.k)" data-k="${escHtml(s.key)}">${open ? '▾' : '▸'}</span>`;
+    const detail = open ? `<tr><td colspan="8" style="padding:0">${catProductRows(data.filter(r => keyFn(r) === s.key))}</td></tr>` : '';
     return `<tr>
-      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px">${i + 1}</td>
+      <td style="color:var(--text-dim);font-family:'DM Mono',monospace;font-size:11px;white-space:nowrap">${arrow}${i + 1}</td>
       ${nameCell}
       <td class="qty">${s.productCount}</td>
       <td class="qty">${s.listings}</td>
@@ -909,13 +943,13 @@ function renderCategory(data) {
       <td>${miniBar(s.avgRate, 100, 'var(--blue)')}</td>
       <td class="qty">${s.soldOutCount}（${s.soldOutRate.toFixed(0)}%）</td>
       <td class="qty">${fmtMoney(s.totalRevenue)}</td>
-    </tr>`;
+    </tr>${detail}`;
   }).join('');
 
   document.getElementById('view-category').innerHTML = `
     <div class="sum-row" style="background:var(--blue-lt);margin-bottom:16px;padding:12px 16px;border-radius:var(--radius)">
       <span style="color:var(--blue);font-weight:700">🏷️ 已有品類的商品：${catIcodes.size} / ${allIcodes.size}（${coverage.toFixed(0)}%）</span>
-      <span style="color:var(--text-mid)">品類來自 momo 商品頁；舊商品會逐檔補齊，尚未補到的列為「未分類」</span>
+      <span style="color:var(--text-mid)">品類來自 momo 商品頁；舊商品會逐檔補齊，尚未補到的列為「未分類」。點 ▸ 展開品類內的商品，再點商品名稱看履歷</span>
     </div>
     <div class="card">
       <div class="card-header">
